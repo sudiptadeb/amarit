@@ -76,6 +76,9 @@ type Options struct {
 	Interval       time.Duration
 	// Service is the "service <verb>" subcommand when one was given.
 	Service string
+	// Update is the "update" subcommand: check, apply, print the running
+	// version, exit. The one-shot form for people and scripts.
+	Update bool
 }
 
 var current *Updater
@@ -99,11 +102,14 @@ func Run(cfg Config) Options {
 	if opts.Interval == 0 {
 		opts.Interval = defaultInterval
 	}
-	if !opts.AutoUpdate && !opts.CheckOnce {
+	if !opts.AutoUpdate && !opts.CheckOnce && !opts.Update {
 		return opts
 	}
 	if cfg.Manifest == "" && opts.ManifestURL == "" {
-		log.Printf("upkeep: no manifest URL configured; --auto-update ignored")
+		log.Printf("upkeep: no manifest URL configured; updates are off in this build")
+		if opts.Update {
+			os.Exit(1)
+		}
 		return opts
 	}
 	u, err := newUpdater(cfg, opts, argv)
@@ -113,6 +119,14 @@ func Run(cfg Config) Options {
 	}
 	current = u
 	ok := u.reconcile()
+	if opts.Update {
+		// A successful apply execs the new binary with this same command
+		// line; the new process lands here again, reports "already on",
+		// and exits. So the user sees the final version either way.
+		u.once(context.Background())
+		fmt.Fprintf(os.Stderr, "%s %s\n", cfg.Project, strings.TrimPrefix(cfg.Version, "v"))
+		os.Exit(0)
+	}
 	if opts.CheckOnce {
 		u.once(context.Background())
 	}
@@ -189,6 +203,12 @@ func parseArgs(args []string) (Options, []string) {
 			if i == 0 && i+1 < len(args) {
 				o.Service = args[i+1]
 				i++
+				continue
+			}
+			rest = append(rest, a)
+		case "update":
+			if i == 0 {
+				o.Update = true
 				continue
 			}
 			rest = append(rest, a)

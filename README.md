@@ -54,8 +54,9 @@ A stateful program passes `upkeep.Hooks{Handoff, Drain, Healthy}` to `Start`.
 
 Three ways to control it, later ones win: values in code with
 `upkeep.Run(upkeep.Config{...})`, the stamped `upkeep.config`, then the
-command line: `--auto-update[=channel]`, `--update-check`, `--update-url`,
-`--update-key`, `--update-key-url`, `--allow-downgrade`, and
+command line: `<program> update` (check, apply, print the version, exit),
+`--auto-update[=channel]`, `--update-check` (check once, then carry on),
+`--update-url`, `--update-key`, `--update-key-url`, `--allow-downgrade`, and
 `service install|status|stop|uninstall`. An operator can therefore repoint a
 binary at a mirror or a key without a rebuild, and nothing is ever hardcoded.
 

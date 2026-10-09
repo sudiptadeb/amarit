@@ -105,6 +105,10 @@ func TestParseArgs(t *testing.T) {
 	if o.Service != "install" || len(rest) != 1 || rest[0] != "--system" {
 		t.Fatalf("service %q rest %v", o.Service, rest)
 	}
+	o, rest = parseArgs([]string{"update", "--update-url=https://m"})
+	if !o.Update || o.ManifestURL != "https://m" || len(rest) != 0 {
+		t.Fatalf("update subcommand: %+v rest %v", o, rest)
+	}
 	o, rest = parseArgs([]string{"-rc", "service"})
 	if o.Service != "" || len(rest) != 2 {
 		t.Fatalf("a later word 'service' belongs to the program: %q %v", o.Service, rest)
