@@ -23,26 +23,36 @@ tmux or nothing at all.
 
 ## Integration
 
+Nothing is hardcoded in the program. An `upkeep.config` at the repository root
+holds the project name, manifest URL, optional key and service description; the
+release tool stamps it into the binary at build time, and the program reads the
+stamp:
+
+```json
+{
+  "project": "termulaa",
+  "manifest": "https://github.com/sudiptadeb/termulaa/releases/latest/download/upkeep.json",
+  "key": "RWQf6LRCGA9i...",
+  "restart": "overlap",
+  "service": { "restart": "on-failure", "no_restart_exit": [4, 5, 7], "health": "http://127.0.0.1:17380/health" },
+  "release": { "targets": ["darwin/arm64", "darwin/amd64", "linux/amd64", "linux/arm64"] }
+}
+```
+
 ```go
 import "github.com/sudiptadeb/upkeep"
 
-var Version = "dev" // -ldflags "-X main.Version=0.5.3"
-
 func main() {
-    upkeep.Run(upkeep.Config{
-        Project:  "termulaa",
-        Version:  Version,
-        Manifest: "https://github.com/sudiptadeb/termulaa/releases/latest/download/upkeep.json",
-        Key:      "RWQf6LRCGA9i...", // optional: enables the signed tier
-    })
+    upkeep.Start() // reads the stamped upkeep.config; a plain `go build` has no stamp and does nothing
     // the program as before
 }
 ```
 
-A stateful program adds `Handoff` (descriptors to carry across: listeners, PTYs),
-`Drain` (bounded by the engine) and `Healthy` (gates rollback). Flags `Run` adds:
-`--auto-update[=channel]`, `--update-check`, `--update-url`, `--update-key`,
-`--update-key-url`, `--allow-downgrade`, `service install|status|stop|uninstall`.
+A stateful program passes `upkeep.Hooks{Handoff, Drain, Healthy}` to `Start`.
+`upkeep.Run(upkeep.Config{...})` remains for programs that want to supply the
+values themselves. Flags added either way: `--auto-update[=channel]`,
+`--update-check`, `--update-url`, `--update-key`, `--update-key-url`,
+`--allow-downgrade`, `service install|status|stop|uninstall`.
 
 ## How an update runs
 

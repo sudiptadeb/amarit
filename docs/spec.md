@@ -131,9 +131,40 @@ or `~/.<project>/upkeep` on macOS):
 | `healthy` | written by the new process when `Healthy()` first returns true; absence after three starts triggers rollback |
 | `<bin>.prev` | the previous binary, beside the current one, kept for rollback |
 
-## 8. Service description
+## 8. Project configuration: `upkeep.config`
 
-Reserved for the keep-alive tier. A project may ship `upkeep-service.json`
-describing how it wants to be run (instances, environment file, restart policy,
-exit codes that must not restart, health command). The format will be specified
-with the `service install` implementation.
+One JSON file at the repository root, read by `upkeep release` to build the
+manifest and stamped into the binary so the program hardcodes nothing:
+
+```json
+{
+  "project": "termulaa",
+  "manifest": "https://github.com/sudiptadeb/termulaa/releases/latest/download/upkeep.json",
+  "key": "RWQ…",
+  "versions": "semver",
+  "restart": "overlap",
+  "service": {
+    "instances": 1,
+    "env_file": "data/app.env",
+    "args": ["serve"],
+    "restart": "on-failure",
+    "no_restart_exit": [4, 5, 7],
+    "health": "http://127.0.0.1:17380/health"
+  },
+  "release": { "targets": ["darwin/arm64", "linux/amd64"] }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `project`, `manifest` | required; the manifest's `project` must match |
+| `key` | the author's minisign public key; present means the signed tier |
+| `versions` | `semver` (default) or `exact` (section 3) |
+| `restart` | `in-place` (default) or `overlap` for zero-downtime handover |
+| `service.*` | how `service install` runs the program: instance count, environment file, arguments, restart policy, exit codes that must not restart, readiness probe |
+| `release.targets` | the `os/arch` list the release tool builds and lists in the manifest |
+
+The stamp is two linker variables on the `upkeep` package:
+`stampedConfig` (base64 of the file) and `stampedVersion`. A build without them
+is a development build; `upkeep.Start()` then does nothing and says so only
+when asked (`--update-check`).

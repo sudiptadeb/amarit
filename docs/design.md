@@ -108,6 +108,15 @@ Also: a target can be handed in by the program from its own control channel
 (`upkeep.Apply`), and the engine reports when the executable on disk is newer
 than the running process.
 
+## Consumer setup
+
+A consumer hardcodes nothing. `upkeep.config` at the repository root carries
+the project name, manifest URL, optional key, restart strategy and service
+description (spec section 8). `upkeep release` reads it to build the manifest
+and stamps it into the binary with two linker variables; the program calls
+`upkeep.Start()` and is done. A plain `go build` during development has no
+stamp, so the same code path is inert there.
+
 ## Keep-alive tier
 
 A ladder per platform, strongest first: LaunchDaemon with `UserName`, then
