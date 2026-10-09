@@ -89,6 +89,21 @@ No server is required. Static files on any HTTPS host are the default.
 9. The new process writes `healthy` when its readiness check passes. Three
    starts without it swap `.prev` back.
 
+### Restart strategies
+
+Step 7 and 8 have two forms, chosen per program:
+
+| Strategy | How | Downtime | Supervisor |
+|---|---|---|---|
+| overlap | the old process starts the new binary beside itself, passing its listeners (or both bind with `SO_REUSEPORT`); the new one reports ready; the old stops accepting, drains with a deadline, exits | none: connections are never refused, long-lived ones finish on the old process | the PID changes. systemd: `Type=notify` with `MAINPID=` from the new process. Detached or upkeeper: the pid file is rewritten. launchd cannot follow a PID change, so overlap is unavailable there |
+| in place | the old process execs the new binary with the same argv, environment and inherited descriptors | a pause while the old drains and the new starts; queued connections wait in the listen backlog, nothing is refused | the PID never changes: launchd, systemd and nohup all keep supervising |
+
+Overlap is the gateway's zero-downtime upgrade as a library feature, with the
+parts its script got wrong fixed: readiness is a probe the program answers,
+not a port guess, and the drain deadline is hard. In place is the default,
+because it works everywhere; a program opts into overlap with
+`Restart: upkeep.Overlap`.
+
 Also: a target can be handed in by the program from its own control channel
 (`upkeep.Apply`), and the engine reports when the executable on disk is newer
 than the running process.

@@ -31,6 +31,9 @@ type Config struct {
 	// Exact switches version comparison from semver order to exact match,
 	// for projects whose versions are opaque build stamps.
 	Exact bool
+	// Restart selects in-place exec (default) or an overlapping handover
+	// with zero downtime. See docs/design.md, "Restart strategies".
+	Restart RestartStrategy
 
 	// Handoff returns descriptors the new process must inherit across the
 	// exec: listening sockets, PTY masters. Nil for a stateless program.
@@ -42,6 +45,21 @@ type Config struct {
 	// first time this returns true. Nil means healthy on start.
 	Healthy func() bool
 }
+
+// RestartStrategy is how the new binary takes over from the running one.
+type RestartStrategy int
+
+const (
+	// InPlace execs the new binary with the same PID and inherited
+	// descriptors. Works under every supervisor; a short pause while the
+	// old process drains.
+	InPlace RestartStrategy = iota
+	// Overlap starts the new process beside the old one on the same
+	// listeners and drains the old one once the new is ready. Zero
+	// downtime; the PID changes, so the supervisor must be able to follow
+	// (systemd notify, a pid file, upkeeper). Not available under launchd.
+	Overlap
+)
 
 // Options are what Run read from the command line.
 type Options struct {
