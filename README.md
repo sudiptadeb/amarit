@@ -30,8 +30,9 @@ program can use either without the other.
 ```sh
 go install github.com/sudiptadeb/amarit/cmd/amarit@latest
 
-amarit install                    # the daemon, as a LaunchAgent / systemd user unit, else detached
-sudo amarit install --system      # or: at boot, nobody logged in; after this, no more sudo
+amarit install                                  # the daemon, as a LaunchAgent / systemd user unit, else detached
+sudo "$(command -v amarit)" install --system    # or: at boot, nobody logged in; after this, no more sudo
+                                                # (sudo has its own PATH, so name the binary)
 
 amarit run termulaa -rc           # keep it running; restarted on failure, logs kept
 amarit ls
