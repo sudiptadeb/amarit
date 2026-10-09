@@ -1,4 +1,4 @@
-package upkeep
+package amarit
 
 import (
 	"context"
@@ -29,7 +29,7 @@ func serve(t *testing.T, manifest func(assetURL string) string, asset []byte) *h
 	t.Helper()
 	mux := http.NewServeMux()
 	var srv *httptest.Server
-	mux.HandleFunc("/upkeep.json", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, manifest(srv.URL+"/asset"))
 	})
 	mux.HandleFunc("/asset", func(w http.ResponseWriter, r *http.Request) {
@@ -43,8 +43,8 @@ func serve(t *testing.T, manifest func(assetURL string) string, asset []byte) *h
 func manifestFor(version, running string, extra string) func(string) string {
 	return func(assetURL string) string {
 		return fmt.Sprintf(`{"spec":1,"project":"demo","published":"2026-10-09T00:00:00Z",%s
-		  "channels":{"stable":{"version":"%s"}},
-		  "assets":{"%s":{"%s/%s":{"url":"%s","sha256":"%s","size":%d}}}}`,
+		  "channels":{"stable":"%s"},
+		  "releases":{"%s":{"assets":{"%s/%s":{"url":"%s","sha256":"%s","size":%d}}}}}`,
 			extra, version, version, runtime.GOOS, runtime.GOARCH, assetURL, assetSHA, assetSize)
 	}
 }
@@ -66,7 +66,7 @@ func testUpdater(t *testing.T, srv *httptest.Server, exe, running string) *Updat
 		target: runtime.GOOS + "/" + runtime.GOARCH,
 	}
 	if srv != nil {
-		u.cfg.Manifest = srv.URL + "/upkeep.json"
+		u.cfg.Releases = srv.URL + "/releases.json"
 		u.client = srv.Client()
 	}
 	return u
@@ -106,7 +106,7 @@ func TestCheckDecisions(t *testing.T) {
 
 func TestCheckRefusesOtherProject(t *testing.T) {
 	srv := serve(t, func(a string) string {
-		return `{"spec":1,"project":"other","published":"2026-10-09T00:00:00Z","channels":{"stable":{"version":"1.0.0"}},"assets":{"1.0.0":{}}}`
+		return `{"spec":1,"project":"other","published":"2026-10-09T00:00:00Z","channels":{"stable":"1.0.0"},"releases":{"1.0.0":{"assets":{}}}}`
 	}, nil)
 	u := testUpdater(t, srv, fakeBinary(t, t.TempDir(), "demo", "v1"), "0.1.0")
 	if _, err := u.Check(context.Background()); err == nil || !strings.Contains(err.Error(), `for "other"`) {
@@ -138,8 +138,8 @@ func TestApplySwapsAndExecs(t *testing.T) {
 	if got, _ := os.ReadFile(exe); string(got) != string(assetBody) {
 		t.Fatal("the new binary is not in place")
 	}
-	if got, _ := os.ReadFile(exe + ".prev"); !strings.Contains(string(got), "v0.5.0") {
-		t.Fatal(".prev does not hold the old binary")
+	if got, _ := os.ReadFile(u.prevPath()); !strings.Contains(string(got), "v0.5.0") {
+		t.Fatal("the sidecar does not hold the old binary")
 	}
 	st := u.loadState()
 	if st.Attempt != "0.6.0" || st.From != "0.5.0" {
@@ -167,8 +167,8 @@ func TestApplyRefusesBadDigestAndKeepsBinary(t *testing.T) {
 	if got, _ := os.ReadFile(exe); !strings.Contains(string(got), "v0.5.0") {
 		t.Fatal("running binary was touched")
 	}
-	if _, err := os.Stat(exe + ".prev"); err == nil {
-		t.Fatal("no .prev should exist after a refused download")
+	if _, err := os.Stat(u.prevPath()); err == nil {
+		t.Fatal("no previous binary should exist after a refused download")
 	}
 }
 
@@ -178,7 +178,7 @@ func TestApplyRefusesBinaryThatFailsSmokeTest(t *testing.T) {
 	broken := []byte("#!/bin/sh\nexit 3\n")
 	h := sha256.Sum256(broken)
 	srv := serve(t, func(a string) string {
-		return fmt.Sprintf(`{"spec":1,"project":"demo","published":"2026-10-09T00:00:00Z","channels":{"stable":{"version":"0.6.0"}},"assets":{"0.6.0":{"%s/%s":{"url":"%s","sha256":"%s","size":%d}}}}`,
+		return fmt.Sprintf(`{"spec":1,"project":"demo","published":"2026-10-09T00:00:00Z","channels":{"stable":"0.6.0"},"releases":{"0.6.0":{"assets":{"%s/%s":{"url":"%s","sha256":"%s","size":%d}}}}}`,
 			runtime.GOOS, runtime.GOARCH, a, hex.EncodeToString(h[:]), len(broken))
 	}, broken)
 	u := testUpdater(t, srv, exe, "0.5.0")
@@ -195,8 +195,8 @@ func TestApplyRefusesBinaryThatFailsSmokeTest(t *testing.T) {
 func TestReconcileHealthyThenRollback(t *testing.T) {
 	dir := t.TempDir()
 	exe := fakeBinary(t, dir, "demo", "v0.6.0")
-	fakeBinary(t, dir, "demo.prev", "v0.5.0")
 	u := testUpdater(t, nil, exe, "0.6.0")
+	fakeBinary(t, u.sidecar(), "prev", "v0.5.0")
 
 	// A fresh start after an attempt for this very version: healthy.
 	u.saveState(state{Attempt: "0.6.0", From: "0.5.0"})
@@ -214,7 +214,7 @@ func TestReconcileHealthyThenRollback(t *testing.T) {
 		t.Fatal("rollback did not exec the restored binary")
 	}
 	if got, _ := os.ReadFile(exe); !strings.Contains(string(got), "v0.5.0") {
-		t.Fatal(".prev was not restored")
+		t.Fatal("the previous binary was not restored")
 	}
 	if st := u.loadState(); st.Healthy != "0.5.0" || st.Attempt != "" {
 		t.Fatalf("state after rollback: %+v", st)

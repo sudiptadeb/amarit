@@ -1,4 +1,4 @@
-# upkeep: design
+# amarit: design
 
 This is the condensed project proposal. It records the survey that motivated the
 project, the principles, the architecture and the order of work.
@@ -65,8 +65,8 @@ replacement on unsigned manifests hosted there.
 |---|---|
 | spec | JSON manifest, detached signatures, service description |
 | library (Go) | update engine, exec handoff, health rollback, `service` subcommands |
-| upkeeper | per-machine daemon and CLI for things that do not embed the library |
-| release tooling | `upkeep release` and a GitHub Action: build matrix in, manifest out, optional signing on the maintainer's machine |
+| amarit daemon | per-machine daemon and CLI for things that do not embed the library |
+| release tooling | `amarit release` and a GitHub Action: build matrix in, manifest out, optional signing on the maintainer's machine |
 
 No server is required. Static files on any HTTPS host are the default.
 
@@ -95,26 +95,26 @@ Step 7 and 8 have two forms, chosen per program:
 
 | Strategy | How | Downtime | Supervisor |
 |---|---|---|---|
-| overlap | the old process starts the new binary beside itself, passing its listeners (or both bind with `SO_REUSEPORT`); the new one reports ready; the old stops accepting, drains with a deadline, exits | none: connections are never refused, long-lived ones finish on the old process | the PID changes. systemd: `Type=notify` with `MAINPID=` from the new process. Detached or upkeeper: the pid file is rewritten. launchd cannot follow a PID change, so overlap is unavailable there |
+| overlap | the old process starts the new binary beside itself, passing its listeners (or both bind with `SO_REUSEPORT`); the new one reports ready; the old stops accepting, drains with a deadline, exits | none: connections are never refused, long-lived ones finish on the old process | the PID changes. systemd: `Type=notify` with `MAINPID=` from the new process. Detached or amarit daemon: the pid file is rewritten. launchd cannot follow a PID change, so overlap is unavailable there |
 | in place | the old process execs the new binary with the same argv, environment and inherited descriptors | a pause while the old drains and the new starts; queued connections wait in the listen backlog, nothing is refused | the PID never changes: launchd, systemd and nohup all keep supervising |
 
 Overlap is the gateway's zero-downtime upgrade as a library feature, with the
 parts its script got wrong fixed: readiness is a probe the program answers,
 not a port guess, and the drain deadline is hard. In place is the default,
 because it works everywhere; a program opts into overlap with
-`Restart: upkeep.Overlap`.
+`Restart: amarit.Overlap`.
 
 Also: a target can be handed in by the program from its own control channel
-(`upkeep.Apply`), and the engine reports when the executable on disk is newer
+(`amarit.Apply`), and the engine reports when the executable on disk is newer
 than the running process.
 
 ## Consumer setup
 
-A consumer hardcodes nothing. `upkeep.config` at the repository root carries
+A consumer hardcodes nothing. `amarit.json` at the repository root carries
 the project name, manifest URL, optional key, restart strategy and service
-description (spec section 8). `upkeep release` reads it to build the manifest
+description (spec section 8). `amarit release` reads it to build the manifest
 and stamps it into the binary with two linker variables; the program calls
-`upkeep.Start()` and is done. A plain `go build` during development has no
+`amarit.Start()` and is done. A plain `go build` during development has no
 stamp, so the same code path is inert there.
 
 ## Keep-alive tier
@@ -124,13 +124,13 @@ LaunchAgent, then detached; systemd system unit, then user unit with lingering,
 then detached. Features taken from the surveyed projects: N instances with
 per-instance environment, an environment file at exec, restart-on-failure with
 excluded exit codes, a run-flag file, throttle, log rotation, stray detection
-that replaces only processes upkeep started itself, and a `status` that reports
+that replaces only processes amarit started itself, and a `status` that reports
 installed, loaded, running, healthy, and running-older-than-installed.
 
 ## Consumers, in order
 
 1. A stateless tunnel agent on a canary channel.
-2. A reverse SSH tunnel and a vendor agent with no supervisor, via upkeeper.
+2. A reverse SSH tunnel and a vendor agent with no supervisor, via amarit daemon.
 3. A terminal server, with PTY handoff.
 4. A web service, replacing an SSH deploy pipeline.
 5. A multi-process agent harness, replacing a 400-line service installer.

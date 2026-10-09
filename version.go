@@ -1,4 +1,4 @@
-package upkeep
+package amarit
 
 import (
 	"fmt"

@@ -1,3 +1,3 @@
-module github.com/sudiptadeb/upkeep
+module github.com/sudiptadeb/amarit
 
 go 1.25

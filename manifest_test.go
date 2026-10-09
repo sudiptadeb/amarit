@@ -1,4 +1,4 @@
-package upkeep
+package amarit
 
 import (
 	"strings"
@@ -12,18 +12,15 @@ const goodManifest = `{
   "published": "2026-10-09T10:00:00Z",
   "expires": "2026-11-09T10:00:00Z",
   "min_version": "0.5.0",
-  "channels": {
-    "stable": { "version": "0.5.2" },
-    "canary": { "version": "0.5.3", "rollout": 25, "critical": true }
-  },
-  "assets": {
-    "0.5.2": {
+  "channels": { "stable": "0.5.2", "canary": "0.5.3" },
+  "releases": {
+    "0.5.2": { "assets": {
       "darwin/arm64": { "url": "https://example.com/t-0.5.2", "sha256": "` + zeros + `", "size": 10 }
-    },
-    "0.5.3": {
+    } },
+    "0.5.3": { "rollout": 25, "critical": true, "assets": {
       "darwin/arm64": { "url": "https://example.com/t-0.5.3", "sha256": "` + zeros + `", "size": 11, "sig": "RWQ" },
       "android":      { "url": "https://example.com/t.apk", "sha256": "` + zeros + `", "size": 12, "version_code": 4 }
-    }
+    } }
   }
 }`
 
@@ -37,14 +34,14 @@ func TestParseManifest(t *testing.T) {
 	if m.Project != "termulaa" || m.MinVersion != "0.5.0" {
 		t.Fatalf("parsed %+v", m)
 	}
-	ch, a, ok := m.Lookup("canary", "darwin/arm64")
-	if !ok || ch.Version != "0.5.3" || a.Size != 11 || a.Sig != "RWQ" || !ch.Critical {
-		t.Fatalf("lookup canary/darwin/arm64 = %+v %+v %v", ch, a, ok)
+	v, r, a, ok := m.Lookup("canary", "darwin/arm64")
+	if !ok || v != "0.5.3" || a.Size != 11 || a.Sig != "RWQ" || !r.Critical || *r.Rollout != 25 {
+		t.Fatalf("lookup canary/darwin/arm64 = %s %+v %+v %v", v, r, a, ok)
 	}
-	if _, _, ok := m.Lookup("stable", "android"); ok {
+	if _, _, _, ok := m.Lookup("stable", "android"); ok {
 		t.Fatal("stable has no android asset, lookup must say so")
 	}
-	if _, _, ok := m.Lookup("beta", "darwin/arm64"); ok {
+	if _, _, _, ok := m.Lookup("beta", "darwin/arm64"); ok {
 		t.Fatal("unknown channel must not resolve")
 	}
 	if m.Stale(time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC)) {
@@ -57,14 +54,14 @@ func TestParseManifest(t *testing.T) {
 
 func TestParseManifestRejects(t *testing.T) {
 	cases := map[string]string{
-		"unknown spec":           strings.Replace(goodManifest, `"spec": 1`, `"spec": 2`, 1),
-		"missing project":        strings.Replace(goodManifest, `"project": "termulaa"`, `"project": ""`, 1),
-		"channel without assets": strings.Replace(goodManifest, `"version": "0.5.2"`, `"version": "0.9.9"`, 1),
-		"rollout out of range":   strings.Replace(goodManifest, `"rollout": 25`, `"rollout": 101`, 1),
-		"bad digest":             strings.Replace(goodManifest, zeros, "abc", 1),
-		"zero size":              strings.Replace(goodManifest, `"size": 10`, `"size": 0`, 1),
-		"version with bad chars": strings.Replace(goodManifest, `"0.5.3"`, `"0.5.3 beta"`, -1),
-		"no channels":            strings.Replace(goodManifest, `"channels": {`, `"channels": {}, "x": {`, 1),
+		"unknown spec":            strings.Replace(goodManifest, `"spec": 1`, `"spec": 2`, 1),
+		"missing project":         strings.Replace(goodManifest, `"project": "termulaa"`, `"project": ""`, 1),
+		"channel without release": strings.Replace(goodManifest, `"stable": "0.5.2"`, `"stable": "0.9.9"`, 1),
+		"rollout out of range":    strings.Replace(goodManifest, `"rollout": 25`, `"rollout": 101`, 1),
+		"bad digest":              strings.Replace(goodManifest, zeros, "abc", 1),
+		"zero size":               strings.Replace(goodManifest, `"size": 10`, `"size": 0`, 1),
+		"version with bad chars":  strings.Replace(goodManifest, `"0.5.3"`, `"0.5.3 beta"`, -1),
+		"no channels":             strings.Replace(goodManifest, `"channels": {`, `"channels": {}, "x": {`, 1),
 	}
 	for name, body := range cases {
 		if _, err := ParseManifest([]byte(body)); err == nil {

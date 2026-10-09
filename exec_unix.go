@@ -1,6 +1,6 @@
 //go:build unix
 
-package upkeep
+package amarit
 
 import "syscall"
 

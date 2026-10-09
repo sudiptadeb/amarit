@@ -1,4 +1,4 @@
-package upkeep
+package amarit
 
 import (
 	"encoding/binary"
@@ -13,24 +13,24 @@ import (
 // with any other "spec" value is refused rather than guessed at.
 const SpecVersion = 1
 
-// Manifest is one project's upkeep.json: every channel, every version it
-// points at, and the assets for each target. See docs/spec.md.
+// Manifest is one project's releases.json: which version each channel
+// points at, and the assets of every version. See docs/spec.md.
 type Manifest struct {
-	Spec       int                         `json:"spec"`
-	Project    string                      `json:"project"`
-	Published  time.Time                   `json:"published"`
-	Expires    *time.Time                  `json:"expires,omitempty"`
-	MinVersion string                      `json:"min_version,omitempty"`
-	Notes      string                      `json:"notes,omitempty"`
-	Channels   map[string]Channel          `json:"channels"`
-	Assets     map[string]map[string]Asset `json:"assets"`
+	Spec       int                `json:"spec"`
+	Project    string             `json:"project"`
+	Published  time.Time          `json:"published"`
+	Expires    *time.Time         `json:"expires,omitempty"`
+	MinVersion string             `json:"min_version,omitempty"`
+	Notes      string             `json:"notes,omitempty"`
+	Channels   map[string]string  `json:"channels"`
+	Releases   map[string]Release `json:"releases"`
 }
 
-// Channel points a named channel at one version.
-type Channel struct {
-	Version  string `json:"version"`
-	Rollout  *int   `json:"rollout,omitempty"`
-	Critical bool   `json:"critical,omitempty"`
+// Release is one published version: how it rolls out and what to download.
+type Release struct {
+	Rollout  *int             `json:"rollout,omitempty"`
+	Critical bool             `json:"critical,omitempty"`
+	Assets   map[string]Asset `json:"assets"`
 }
 
 // Asset is one downloadable file for one target.
@@ -48,7 +48,7 @@ var (
 )
 
 // ParseManifest decodes and validates a manifest. Validation is strict: a
-// channel that names a version with no assets, a bad digest, or an unknown
+// channel that names a version with no release, a bad digest, or an unknown
 // spec number all fail here, before anything is downloaded.
 func ParseManifest(data []byte) (*Manifest, error) {
 	var m Manifest
@@ -70,22 +70,22 @@ func ParseManifest(data []byte) (*Manifest, error) {
 	if m.MinVersion != "" && !exactVersionRe.MatchString(m.MinVersion) {
 		return nil, fmt.Errorf("manifest: min_version %q has invalid characters", m.MinVersion)
 	}
-	for name, ch := range m.Channels {
-		if !exactVersionRe.MatchString(ch.Version) {
-			return nil, fmt.Errorf("manifest: channel %q version %q has invalid characters", name, ch.Version)
+	for name, version := range m.Channels {
+		if !exactVersionRe.MatchString(version) {
+			return nil, fmt.Errorf("manifest: channel %q version %q has invalid characters", name, version)
 		}
-		if _, ok := m.Assets[ch.Version]; !ok {
-			return nil, fmt.Errorf("manifest: channel %q points at version %q, which has no assets", name, ch.Version)
-		}
-		if ch.Rollout != nil && (*ch.Rollout < 0 || *ch.Rollout > 100) {
-			return nil, fmt.Errorf("manifest: channel %q rollout %d is not within 0-100", name, *ch.Rollout)
+		if _, ok := m.Releases[version]; !ok {
+			return nil, fmt.Errorf("manifest: channel %q points at version %q, which has no release", name, version)
 		}
 	}
-	for version, targets := range m.Assets {
+	for version, r := range m.Releases {
 		if !exactVersionRe.MatchString(version) {
 			return nil, fmt.Errorf("manifest: version %q has invalid characters", version)
 		}
-		for target, a := range targets {
+		if r.Rollout != nil && (*r.Rollout < 0 || *r.Rollout > 100) {
+			return nil, fmt.Errorf("manifest: %s: rollout %d is not within 0-100", version, *r.Rollout)
+		}
+		for target, a := range r.Assets {
 			if a.URL == "" {
 				return nil, fmt.Errorf("manifest: %s %s: url is required", version, target)
 			}
@@ -106,24 +106,28 @@ func (m *Manifest) Stale(now time.Time) bool {
 	return m.Expires != nil && now.After(*m.Expires)
 }
 
-// Lookup returns the channel and the asset for a target such as
-// "darwin/arm64" or "android". A manifest that has nothing for the target is
-// not an error; ok is false and the caller moves on.
-func (m *Manifest) Lookup(channel, target string) (ch Channel, a Asset, ok bool) {
-	ch, ok = m.Channels[channel]
+// Lookup resolves a channel to its version, release and the asset for a
+// target such as "darwin/arm64" or "android". A manifest with nothing for
+// the target is not an error; ok is false and the caller moves on.
+func (m *Manifest) Lookup(channel, target string) (version string, r Release, a Asset, ok bool) {
+	version, ok = m.Channels[channel]
 	if !ok {
-		return Channel{}, Asset{}, false
+		return "", Release{}, Asset{}, false
 	}
-	a, ok = m.Assets[ch.Version][target]
+	r, ok = m.Releases[version]
 	if !ok {
-		return Channel{}, Asset{}, false
+		return "", Release{}, Asset{}, false
 	}
-	return ch, a, true
+	a, ok = r.Assets[target]
+	if !ok {
+		return "", Release{}, Asset{}, false
+	}
+	return version, r, a, true
 }
 
-// InRollout decides whether an install takes a channel's version, from the
-// install's fixed random id and the channel's rollout percentage. The same id
-// stays selected as the percentage rises, so a rollout widens instead of
+// InRollout decides whether an install takes a release, from the install's
+// fixed random id and the release's rollout percentage. The same id stays
+// selected as the percentage rises, so a rollout widens instead of
 // reshuffling.
 func InRollout(installID []byte, rollout *int) bool {
 	pct := 100

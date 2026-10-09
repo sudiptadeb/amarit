@@ -1,8 +1,8 @@
-// Command upkeep is the release side of the library: it stamps builds and
-// writes the manifest a project publishes next to its release assets.
+// Command amarit is the release side of the library: it stamps builds and
+// writes the releases.json a project publishes next to its release assets.
 //
-//	upkeep stamp   [-config upkeep.config] -version 0.5.3
-//	upkeep release [-config upkeep.config] -version 0.5.3 -dist dist [-channel stable] [-out upkeep.json]
+//	amarit stamp   [-config amarit.json] -version 0.5.3
+//	amarit release [-config amarit.json] -version 0.5.3 -dist dist [-channel stable] [-out releases.json]
 package main
 
 import (
@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sudiptadeb/upkeep"
+	"github.com/sudiptadeb/amarit"
 )
 
 func main() {
@@ -32,6 +33,26 @@ func main() {
 		err = stamp(os.Args[2:])
 	case "release":
 		err = release(os.Args[2:])
+	case "install":
+		err = install(os.Args[2:])
+	case "uninstall":
+		err = uninstall(os.Args[2:])
+	case "daemon":
+		err = daemon(os.Args[2:])
+	case "run":
+		err = run(os.Args[2:])
+	case "ls", "status":
+		err = ls(os.Args[2:])
+	case "stop":
+		err = named(os.Args[2:], func(n string) error { return setEnabled(n, false) })
+	case "start":
+		err = named(os.Args[2:], func(n string) error { return setEnabled(n, true) })
+	case "rm":
+		err = named(os.Args[2:], amarit.DefaultBase().RemoveUnit)
+	case "logs":
+		err = logs(os.Args[2:])
+	case "version", "-version", "--version":
+		fmt.Println(version)
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -39,32 +60,53 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "upkeep:", err)
+		fmt.Fprintln(os.Stderr, "amarit:", err)
 		os.Exit(1)
 	}
 }
 
+var version = "dev"
+
 func usage() {
-	fmt.Fprintln(os.Stderr, `usage:
-  upkeep stamp   [-config upkeep.config] -version X     print the -ldflags value that stamps a build
-  upkeep release [-config upkeep.config] -version X -dist DIR [-channel stable] [-out upkeep.json]
-                                                        write the manifest for the assets in DIR`)
+	fmt.Fprintln(os.Stderr, `amarit: keep it alive, keep it current.
+
+keep it alive (this machine):
+  amarit install [--system]        keep the amarit daemon itself running; --system needs sudo once,
+                                   after which 'amarit run' never does
+  amarit run <binary> [args...]    keep a program running (unit named after the binary)
+  amarit ls                        every unit, its state, pid, restarts
+  amarit logs [-f] <unit>          a unit's output
+  amarit stop|start|rm <unit>
+  amarit uninstall
+
+keep it current (release side):
+  amarit stamp   [-config amarit.json] -version X                print the -ldflags that stamp a build
+  amarit release [-config amarit.json] -version X -dist DIR      write releases.json for the assets in DIR
+
+A program built with amarit updates itself: '<program> update' or '<program> --auto-update'.`)
 }
 
-func loadConfig(path string) (*upkeep.ProjectConfig, []byte, error) {
+func named(args []string, fn func(string) error) error {
+	if len(args) != 1 {
+		return errors.New("one unit name is required")
+	}
+	return fn(args[0])
+}
+
+func loadConfig(path string) (*amarit.ProjectConfig, []byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	c, err := upkeep.ParseProjectConfig(raw)
+	c, err := amarit.ParseProjectConfig(raw)
 	return c, raw, err
 }
 
-// stamp prints the linker flags that put upkeep.config and the version into
-// the binary, so a build script can do: go build -ldflags "$(upkeep stamp -version X)".
+// stamp prints the linker flags that put amarit.config and the version into
+// the binary, so a build script can do: go build -ldflags "$(amarit stamp -version X)".
 func stamp(args []string) error {
 	fs := flag.NewFlagSet("stamp", flag.ContinueOnError)
-	config := fs.String("config", "upkeep.config", "project configuration")
+	config := fs.String("config", "amarit.config", "project configuration")
 	version := fs.String("version", "", "version being built")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -76,21 +118,21 @@ func stamp(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("-X github.com/sudiptadeb/upkeep.stampedConfig=%s -X github.com/sudiptadeb/upkeep.stampedVersion=%s\n",
+	fmt.Printf("-X github.com/sudiptadeb/amarit.stampedConfig=%s -X github.com/sudiptadeb/amarit.stampedVersion=%s\n",
 		base64.StdEncoding.EncodeToString(raw), strings.TrimPrefix(*version, "v"))
 	return nil
 }
 
 // release hashes the built assets and writes the manifest. The asset file
-// name and its download URL come from patterns in upkeep.config, with
+// name and its download URL come from patterns in amarit.config, with
 // {version}, {os}, {arch} and {asset} filled in.
 func release(args []string) error {
 	fs := flag.NewFlagSet("release", flag.ContinueOnError)
-	config := fs.String("config", "upkeep.config", "project configuration")
+	config := fs.String("config", "amarit.config", "project configuration")
 	version := fs.String("version", "", "version being released")
 	dist := fs.String("dist", "dist", "directory holding the built assets")
 	channel := fs.String("channel", "stable", "channel to point at this version")
-	out := fs.String("out", "upkeep.json", "manifest to write")
+	out := fs.String("out", "amarit.json", "manifest to write")
 	expires := fs.Duration("expires", 0, "how long the manifest stays fresh (0 = no expiry)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -110,12 +152,12 @@ func release(args []string) error {
 	}
 	v := strings.TrimPrefix(*version, "v")
 
-	m := upkeep.Manifest{
-		Spec:      upkeep.SpecVersion,
+	m := amarit.Manifest{
+		Spec:      amarit.SpecVersion,
 		Project:   c.Project,
 		Published: time.Now().UTC().Truncate(time.Second),
-		Channels:  map[string]upkeep.Channel{},
-		Assets:    map[string]map[string]upkeep.Asset{},
+		Channels:  map[string]string{},
+		Releases:  map[string]amarit.Release{},
 	}
 	if *expires > 0 {
 		e := m.Published.Add(*expires)
@@ -124,15 +166,15 @@ func release(args []string) error {
 	// Keep what an existing manifest already says about other channels and
 	// versions, so promoting canary never forgets stable.
 	if old, err := os.ReadFile(*out); err == nil {
-		if om, err := upkeep.ParseManifest(old); err == nil && om.Project == c.Project {
-			m.Channels, m.Assets, m.MinVersion = om.Channels, om.Assets, om.MinVersion
+		if om, err := amarit.ParseManifest(old); err == nil && om.Project == c.Project {
+			m.Channels, m.Releases, m.MinVersion = om.Channels, om.Releases, om.MinVersion
 		}
 	}
 	if c.Release.MinVersion != "" {
 		m.MinVersion = c.Release.MinVersion
 	}
 
-	assets := map[string]upkeep.Asset{}
+	assets := map[string]amarit.Asset{}
 	for _, target := range c.Release.Targets {
 		goos, goarch, _ := strings.Cut(target, "/")
 		fill := strings.NewReplacer("{version}", v, "{os}", goos, "{arch}", goarch)
@@ -146,17 +188,17 @@ func release(args []string) error {
 			return err
 		}
 		url := strings.NewReplacer("{version}", v, "{os}", goos, "{arch}", goarch, "{asset}", name).Replace(c.Release.URL)
-		assets[target] = upkeep.Asset{URL: url, SHA256: sum, Size: size}
+		assets[target] = amarit.Asset{URL: url, SHA256: sum, Size: size}
 		fmt.Fprintf(os.Stderr, "  %-14s %s  %d bytes  %s\n", target, name, size, sum[:12])
 	}
-	m.Assets[v] = assets
-	m.Channels[*channel] = upkeep.Channel{Version: v}
+	m.Releases[v] = amarit.Release{Assets: assets}
+	m.Channels[*channel] = v
 
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
-	if _, err := upkeep.ParseManifest(data); err != nil {
+	if _, err := amarit.ParseManifest(data); err != nil {
 		return fmt.Errorf("refusing to write an invalid manifest: %w", err)
 	}
 	if err := os.WriteFile(*out, append(data, '\n'), 0o644); err != nil {

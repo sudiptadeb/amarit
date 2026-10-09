@@ -1,22 +1,19 @@
-package upkeep
+package amarit
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"os"
+	"strings"
 )
 
-// ProjectConfig is upkeep.config at a project's repository root. The release
-// tool reads it to build the manifest and to stamp the binary; the binary
+// ProjectConfig is amarit.json at a project's repository root. The release
+// tool reads it to build releases.json and to stamp the binary; the binary
 // reads the stamped copy at startup. One file, both sides.
 type ProjectConfig struct {
 	Project  string `json:"project"`
-	Manifest string `json:"manifest"`
+	Releases string `json:"releases"` // the releases.json URL
 	Key      string `json:"key,omitempty"`
-	// Versions is "semver" (default) or "exact".
-	Versions string `json:"versions,omitempty"`
 	// Restart is "in-place" (default) or "overlap".
 	Restart string         `json:"restart,omitempty"`
 	Service *ServiceConfig `json:"service,omitempty"`
@@ -33,7 +30,7 @@ type ServiceConfig struct {
 	Health        string   `json:"health,omitempty"` // URL or command the service answers when ready
 }
 
-// ReleaseConfig is what `upkeep release` needs beyond the build itself.
+// ReleaseConfig is what `amarit release` needs beyond the build itself.
 // Asset and URL are patterns; {version}, {os}, {arch} and (in URL) {asset}
 // are filled in per target.
 type ReleaseConfig struct {
@@ -43,77 +40,59 @@ type ReleaseConfig struct {
 	MinVersion string   `json:"min_version,omitempty"` // floor to publish in every manifest
 }
 
-// Stamped by `upkeep release` (or any build) with
+// Stamped by `amarit stamp` (or any build) with
 //
-//	-ldflags "-X github.com/sudiptadeb/upkeep.stampedConfig=<base64 upkeep.config> -X github.com/sudiptadeb/upkeep.stampedVersion=0.5.3"
+//	-ldflags "-X github.com/sudiptadeb/amarit.stampedProject=<base64 amarit.json> -X github.com/sudiptadeb/amarit.stampedVersion=0.5.3"
 //
-// so that the program itself needs no embed directive and no arguments.
+// so that the program needs no embed directive and no arguments.
 var (
-	stampedConfig  string
+	stampedProject string
 	stampedVersion string
 )
 
-// ParseProjectConfig decodes and validates an upkeep.config.
+// ParseProjectConfig decodes and validates an amarit.json.
 func ParseProjectConfig(data []byte) (*ProjectConfig, error) {
 	var c ProjectConfig
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("upkeep.config: %w", err)
+		return nil, fmt.Errorf("amarit.json: %w", err)
 	}
 	if c.Project == "" {
-		return nil, fmt.Errorf("upkeep.config: project is required")
+		return nil, fmt.Errorf("amarit.json: project is required")
 	}
-	if c.Manifest == "" {
-		return nil, fmt.Errorf("upkeep.config: manifest is required")
-	}
-	switch c.Versions {
-	case "", "semver", "exact":
-	default:
-		return nil, fmt.Errorf("upkeep.config: versions %q must be semver or exact", c.Versions)
+	if c.Releases == "" {
+		return nil, fmt.Errorf("amarit.json: releases is required")
 	}
 	switch c.Restart {
 	case "", "in-place", "overlap":
 	default:
-		return nil, fmt.Errorf("upkeep.config: restart %q must be in-place or overlap", c.Restart)
+		return nil, fmt.Errorf("amarit.json: restart %q must be in-place or overlap", c.Restart)
 	}
 	return &c, nil
 }
 
-// Start is Run for a binary stamped by `upkeep release`: it decodes the
-// stamped upkeep.config and version and hands them to Run. A binary built
-// without the stamp gets an empty Options and a nil error: upkeep is simply
-// not configured in that build, which is a plain `go build` during
-// development.
-func Start(hooks ...Hooks) (Options, error) {
-	if stampedConfig == "" {
-		return Options{}, nil
+// stampedConfig is the Config a build carries. A binary built without the
+// stamp (a plain `go build` during development) gets an empty Config and
+// no error: amarit is simply not configured in that build.
+func stampedConfig() (Config, error) {
+	if stampedProject == "" {
+		return Config{Version: stampedVersion}, nil
 	}
-	raw, err := base64.StdEncoding.DecodeString(stampedConfig)
+	raw, err := base64.StdEncoding.DecodeString(stampedProject)
 	if err != nil {
-		return Options{}, fmt.Errorf("upkeep: stamped config is not base64: %w", err)
+		return Config{}, fmt.Errorf("stamped amarit.json is not base64: %w", err)
 	}
 	c, err := ParseProjectConfig(raw)
 	if err != nil {
-		return Options{}, err
+		return Config{}, err
 	}
 	cfg := Config{
 		Project:  c.Project,
-		Version:  stampedVersion,
-		Manifest: c.Manifest,
+		Version:  strings.TrimPrefix(stampedVersion, "v"),
+		Releases: c.Releases,
 		Key:      c.Key,
-		Exact:    c.Versions == "exact",
 	}
 	if c.Restart == "overlap" {
 		cfg.Restart = Overlap
 	}
-	for _, h := range hooks {
-		cfg.Handoff, cfg.Drain, cfg.Healthy = h.Handoff, h.Drain, h.Healthy
-	}
-	return Run(cfg), nil
-}
-
-// Hooks are the optional callbacks a stateful program gives Start.
-type Hooks struct {
-	Handoff func() []*os.File
-	Drain   func(ctx context.Context)
-	Healthy func() bool
+	return cfg, nil
 }

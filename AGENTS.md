@@ -4,8 +4,10 @@ Guide for coding agents and contributors. Read this before changing anything.
 
 ## What this is
 
-upkeep lets a program update itself from a manifest URL and keep itself
-running under any supervisor. README.md is the model, docs/spec.md the
+amarit is a library that lets a program update itself from a release
+manifest, and a daemon that keeps programs running under the best
+persistence a machine allows. The two never overlap: the library updates,
+the daemon keeps alive. README.md is the model, docs/spec.md the
 manifest format, docs/design.md the reasoning. The spec is the contract; code
 follows it, not the other way round.
 
