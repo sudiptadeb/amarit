@@ -18,8 +18,10 @@ tmux or nothing at all.
   enterprise-controlled manifests are add-on tiers.
 - **Opt-in, no magic.** Nothing updates without `--auto-update`.
 
-> Status: design stage. The spec and API are settled; the engine is being built.
-> [docs/design.md](docs/design.md) is the proposal, [docs/spec.md](docs/spec.md) the manifest format.
+> Status: early. The hash tier works end to end (check, verify, swap, exec in
+> place, rollback); descriptor handoff, the service tier, signing and Windows
+> follow the roadmap. [docs/design.md](docs/design.md) is the proposal,
+> [docs/spec.md](docs/spec.md) the manifest format.
 
 ## Integration
 
@@ -86,6 +88,18 @@ report healthy within three starts is rolled back without anyone logging in.
 Published as a release asset, so `releases/latest/download/upkeep.json` is a
 stable URL. `min_version` is the floor and the kill switch; channels are pointers
 to versions. Full format: [docs/spec.md](docs/spec.md).
+
+## Release side
+
+```sh
+go build -ldflags "$(go run github.com/sudiptadeb/upkeep/cmd/upkeep stamp -version 0.5.3)" ./cmd/app
+go run github.com/sudiptadeb/upkeep/cmd/upkeep release -version 0.5.3 -dist release   # writes upkeep.json
+```
+
+`stamp` prints the linker flags that put `upkeep.config` and the version into
+the binary. `release` hashes the built assets named by the config's patterns
+and writes the manifest, keeping other channels from an existing one. Publish
+`upkeep.json` beside the assets.
 
 ## Roadmap
 
