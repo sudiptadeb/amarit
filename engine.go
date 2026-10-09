@@ -356,7 +356,10 @@ func (u *Updater) reconcile() bool {
 // loop checks on an interval with jitter and applies when the check says so.
 func (u *Updater) loop(ctx context.Context, interval time.Duration) {
 	for {
-		jitter := time.Duration(rand.Int64N(int64(interval / 10)))
+		var jitter time.Duration
+		if interval >= 10 {
+			jitter = time.Duration(rand.Int64N(int64(interval / 10)))
+		}
 		select {
 		case <-ctx.Done():
 			return

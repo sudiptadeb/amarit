@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ProjectConfig is amarit.json at a project's repository root. The release
@@ -15,9 +16,12 @@ type ProjectConfig struct {
 	Releases string `json:"releases"` // the releases.json URL
 	Key      string `json:"key,omitempty"`
 	// Restart is "in-place" (default) or "overlap".
-	Restart string         `json:"restart,omitempty"`
-	Service *ServiceConfig `json:"service,omitempty"`
-	Release *ReleaseConfig `json:"release,omitempty"`
+	Restart string `json:"restart,omitempty"`
+	// Interval is how often --auto-update checks, a Go duration such as
+	// "5m" or "6h". Default one hour.
+	Interval string         `json:"interval,omitempty"`
+	Service  *ServiceConfig `json:"service,omitempty"`
+	Release  *ReleaseConfig `json:"release,omitempty"`
 }
 
 // ServiceConfig is how the program wants to be kept alive.
@@ -67,6 +71,11 @@ func ParseProjectConfig(data []byte) (*ProjectConfig, error) {
 	default:
 		return nil, fmt.Errorf("amarit.json: restart %q must be in-place or overlap", c.Restart)
 	}
+	if c.Interval != "" {
+		if d, err := time.ParseDuration(c.Interval); err != nil || d <= 0 {
+			return nil, fmt.Errorf("amarit.json: interval %q must be a positive duration like 5m or 6h", c.Interval)
+		}
+	}
 	return &c, nil
 }
 
@@ -93,6 +102,9 @@ func stampedConfig() (Config, error) {
 	}
 	if c.Restart == "overlap" {
 		cfg.Restart = Overlap
+	}
+	if c.Interval != "" {
+		cfg.Interval, _ = time.ParseDuration(c.Interval) // validated by ParseProjectConfig
 	}
 	return cfg, nil
 }

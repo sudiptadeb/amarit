@@ -136,10 +136,10 @@ manifest and stamped into the binary so the program hardcodes nothing:
 ```json
 {
   "project": "termulaa",
-  "manifest": "https://github.com/sudiptadeb/termulaa/releases/latest/download/releases.json",
+  "releases": "https://github.com/sudiptadeb/termulaa/releases/latest/download/releases.json",
   "key": "RWQ…",
-  "versions": "semver",
   "restart": "overlap",
+  "interval": "5m",
   "service": {
     "instances": 1,
     "env_file": "data/app.env",
@@ -154,10 +154,10 @@ manifest and stamped into the binary so the program hardcodes nothing:
 
 | Field | Meaning |
 |---|---|
-| `project`, `manifest` | required; the manifest's `project` must match |
+| `project`, `releases` | required; the manifest's `project` must match |
 | `key` | the author's minisign public key; present means the signed tier |
-| `versions` | `semver` (default) or `exact` (section 3) |
 | `restart` | `in-place` (default) or `overlap` for zero-downtime handover |
+| `interval` | how often `--auto-update` checks, a Go duration (default `1h`); `amarit.Interval()` in code, `AMARIT_UPDATE_INTERVAL` and `--update-interval` override it in that order. Exact-match versioning (section 3) is `amarit.ExactVersions()` in code |
 | `service.*` | how `service install` runs the program: instance count, environment file, arguments, restart policy, exit codes that must not restart, readiness probe |
 | `release.targets` | the `os/arch` list the release tool builds and lists in the manifest |
 

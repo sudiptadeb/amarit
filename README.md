@@ -109,17 +109,23 @@ Then every installed copy can update itself:
 
 ```sh
 app update                        # check, verify, swap, restart, print the version, exit
-app --auto-update[=canary]        # the same on an hourly loop
+app --auto-update[=canary]        # the same on a loop, hourly unless told otherwise
 app --update-url https://mirror/releases.json
+app --auto-update --update-interval 5m
 ```
 
 A stateful program adds hooks: `amarit.Start(amarit.Handoff(fds), amarit.Drain(fn), amarit.Healthy(fn))`.
 `Handoff` returns the descriptors (listeners, PTY masters) that must survive
 the restart; the new process gets them back from `amarit.Inherited()` with
 the names it gave them, so an update keeps every connection and terminal.
-Three layers control the result, later ones winning: options in code, the
-stamped file, the command line. A program running as an amarit unit has
-auto-update on (the operator said "keep this current" by putting it there);
+
+Four layers control the result, later ones winning: the stamped file,
+options in code (`amarit.Interval(5*time.Minute)`, `amarit.Key(k)`, ...),
+the environment, the command line. So `"interval": "5m"` in `amarit.json`
+is the program's own cadence, `AMARIT_UPDATE_INTERVAL=30m` in a unit's
+environment changes it for that install, and `--update-interval` wins for
+one run. A program running as an amarit unit has auto-update on (the
+operator said "keep this current" by putting it there);
 `AMARIT_AUTO_UPDATE=0` in the unit's environment turns it off.
 
 ## How an update runs

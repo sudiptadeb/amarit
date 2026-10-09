@@ -34,6 +34,7 @@ type Config struct {
 	Key      string // the author's minisign public key; empty = hash tier
 	Exact    bool   // exact-match versions instead of semver order
 	Restart  RestartStrategy
+	Interval time.Duration // auto-update check cadence; zero means one hour
 
 	Handoff func() []*os.File         // descriptors to carry across the restart
 	Drain   func(ctx context.Context) // called before the restart, with a deadline
@@ -74,6 +75,11 @@ func ExactVersions() Option { return func(c *Config) { c.Exact = true } }
 
 // RestartWith chooses the restart strategy.
 func RestartWith(s RestartStrategy) Option { return func(c *Config) { c.Restart = s } }
+
+// Interval sets how often the auto-update loop checks, overriding the
+// `interval` in amarit.json. AMARIT_UPDATE_INTERVAL in the environment and
+// --update-interval on the command line override both, in that order.
+func Interval(d time.Duration) Option { return func(c *Config) { c.Interval = d } }
 
 // Handoff registers the descriptors the new process must inherit.
 func Handoff(fn func() []*os.File) Option { return func(c *Config) { c.Handoff = fn } }
@@ -127,9 +133,7 @@ func run(cfg Config) Options {
 	if opts.Channel == "" {
 		opts.Channel = "stable"
 	}
-	if opts.Interval == 0 {
-		opts.Interval = defaultInterval
-	}
+	opts.Interval = checkInterval(cfg, opts.Interval)
 	// Under the amarit daemon the operator has already said "keep this
 	// current": auto-update is on unless the unit says AMARIT_AUTO_UPDATE=0.
 	if os.Getenv("AMARIT_MANAGED") == "1" && os.Getenv("AMARIT_AUTO_UPDATE") != "0" &&
@@ -195,6 +199,22 @@ func Apply(ctx context.Context, version string) error {
 		return fmt.Errorf("amarit: release %s has no asset for %s", version, u.target)
 	}
 	return u.Apply(ctx, &Decision{Manifest: d.Manifest, Version: version, Asset: a, Update: true, Reason: "requested"})
+}
+
+// checkInterval resolves the auto-update cadence: --update-interval, then
+// AMARIT_UPDATE_INTERVAL, then the program's Config (code option or
+// amarit.json), then one hour.
+func checkInterval(cfg Config, flag time.Duration) time.Duration {
+	if flag > 0 {
+		return flag
+	}
+	if d, err := time.ParseDuration(os.Getenv("AMARIT_UPDATE_INTERVAL")); err == nil && d > 0 {
+		return d
+	}
+	if cfg.Interval > 0 {
+		return cfg.Interval
+	}
+	return defaultInterval
 }
 
 // parseArgs separates amarit's flags from the program's own arguments.
