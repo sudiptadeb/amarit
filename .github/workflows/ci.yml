@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          diff=$(gofmt -l .)
+          if [ -n "$diff" ]; then echo "gofmt needed on:"; echo "$diff"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
