@@ -18,7 +18,7 @@ type ProjectConfig struct {
 	// Versions is "semver" (default) or "exact".
 	Versions string `json:"versions,omitempty"`
 	// Restart is "in-place" (default) or "overlap".
-	Restart string `json:"restart,omitempty"`
+	Restart string         `json:"restart,omitempty"`
 	Service *ServiceConfig `json:"service,omitempty"`
 	Release *ReleaseConfig `json:"release,omitempty"`
 }
