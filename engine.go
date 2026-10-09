@@ -235,8 +235,21 @@ func (u *Updater) Apply(ctx context.Context, d *Decision) error {
 		u.cfg.Drain(dctx)
 		cancel()
 	}
+	env := os.Environ()
+	if u.cfg.Handoff != nil {
+		files := u.cfg.Handoff()
+		entry, err := prepareHandoff(files)
+		if err != nil {
+			// The swap already happened; the restart still goes ahead, the
+			// new process just starts without the descriptors.
+			log.Printf("amarit: %v; restarting without the handoff", err)
+		} else if entry != "" {
+			env = append(env, entry)
+			log.Printf("amarit: handing %d descriptors to the new process", len(files))
+		}
+	}
 	log.Printf("amarit: %s %s -> %s, restarting", u.cfg.Project, st.From, d.Version)
-	return u.execFn(u.exe, u.argv, os.Environ())
+	return u.execFn(u.exe, u.argv, env)
 }
 
 // download streams the asset into the executable's own directory, hashing

@@ -114,8 +114,13 @@ app --update-url https://mirror/releases.json
 ```
 
 A stateful program adds hooks: `amarit.Start(amarit.Handoff(fds), amarit.Drain(fn), amarit.Healthy(fn))`.
+`Handoff` returns the descriptors (listeners, PTY masters) that must survive
+the restart; the new process gets them back from `amarit.Inherited()` with
+the names it gave them, so an update keeps every connection and terminal.
 Three layers control the result, later ones winning: options in code, the
-stamped file, the command line.
+stamped file, the command line. A program running as an amarit unit has
+auto-update on (the operator said "keep this current" by putting it there);
+`AMARIT_AUTO_UPDATE=0` in the unit's environment turns it off.
 
 ## How an update runs
 
@@ -153,7 +158,7 @@ Full format: [docs/spec.md](docs/spec.md).
 
 ## Roadmap
 
-Descriptor handoff and overlap restart → signed and enterprise tiers →
+Overlap restart → signed and enterprise tiers →
 `amarit install` adopting a program's own service → Windows → spec 1.0.
 
 MIT. See [LICENSE](LICENSE).

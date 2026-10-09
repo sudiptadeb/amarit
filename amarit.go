@@ -130,6 +130,12 @@ func run(cfg Config) Options {
 	if opts.Interval == 0 {
 		opts.Interval = defaultInterval
 	}
+	// Under the amarit daemon the operator has already said "keep this
+	// current": auto-update is on unless the unit says AMARIT_AUTO_UPDATE=0.
+	if os.Getenv("AMARIT_MANAGED") == "1" && os.Getenv("AMARIT_AUTO_UPDATE") != "0" &&
+		!opts.AutoUpdate && !opts.CheckOnce && !opts.Update {
+		opts.AutoUpdate = true
+	}
 	if !opts.AutoUpdate && !opts.CheckOnce && !opts.Update {
 		return opts
 	}
@@ -189,12 +195,6 @@ func Apply(ctx context.Context, version string) error {
 		return fmt.Errorf("amarit: release %s has no asset for %s", version, u.target)
 	}
 	return u.Apply(ctx, &Decision{Manifest: d.Manifest, Version: version, Asset: a, Update: true, Reason: "requested"})
-}
-
-// Inherited returns the descriptors a previous process handed over through
-// the restart, in the order its Handoff returned them. Empty on a fresh start.
-func Inherited() []*os.File {
-	return nil
 }
 
 // parseArgs separates amarit's flags from the program's own arguments.
