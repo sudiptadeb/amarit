@@ -123,8 +123,11 @@ func Run(cfg Config) Options {
 		// A successful apply execs the new binary with this same command
 		// line; the new process lands here again, reports "already on",
 		// and exits. So the user sees the final version either way.
-		u.once(context.Background())
+		fine := u.once(context.Background())
 		fmt.Fprintf(os.Stderr, "%s %s\n", cfg.Project, strings.TrimPrefix(cfg.Version, "v"))
+		if !fine {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	if opts.CheckOnce {

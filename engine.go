@@ -344,16 +344,19 @@ func (u *Updater) loop(ctx context.Context, interval time.Duration) {
 	}
 }
 
-func (u *Updater) once(ctx context.Context) {
+// once is one check-and-apply; it reports whether that went without error.
+func (u *Updater) once(ctx context.Context) bool {
 	d, err := u.Check(ctx)
 	if err != nil {
 		log.Printf("upkeep: check: %v", err)
-		return
+		return false
 	}
 	log.Printf("upkeep: %s", d.Reason)
 	if d.Update {
 		if err := u.Apply(ctx, d); err != nil {
 			log.Printf("upkeep: apply: %v", err)
+			return false
 		}
 	}
+	return true
 }
