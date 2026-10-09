@@ -1,5 +1,9 @@
 # upkeep
 
+[![ci](https://github.com/sudiptadeb/upkeep/actions/workflows/ci.yml/badge.svg)](https://github.com/sudiptadeb/upkeep/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/sudiptadeb/upkeep.svg)](https://pkg.go.dev/github.com/sudiptadeb/upkeep)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **The updater for software that runs as a service.**
 
 upkeep is a Go library, a small JSON spec and a daemon that let a program update
