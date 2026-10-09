@@ -34,9 +34,13 @@ type ServiceConfig struct {
 }
 
 // ReleaseConfig is what `upkeep release` needs beyond the build itself.
+// Asset and URL are patterns; {version}, {os}, {arch} and (in URL) {asset}
+// are filled in per target.
 type ReleaseConfig struct {
-	Targets []string          `json:"targets"`
-	Assets  map[string]string `json:"assets,omitempty"` // target -> built file path pattern
+	Targets    []string `json:"targets"`
+	Asset      string   `json:"asset,omitempty"`       // e.g. "termulaa-{os}-{arch}-v{version}"
+	URL        string   `json:"url,omitempty"`         // e.g. "https://github.com/o/r/releases/download/v{version}/{asset}"
+	MinVersion string   `json:"min_version,omitempty"` // floor to publish in every manifest
 }
 
 // Stamped by `upkeep release` (or any build) with

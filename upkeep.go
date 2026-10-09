@@ -10,8 +10,11 @@ package upkeep
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"os"
 	"strings"
+	"time"
 )
 
 // ErrNotImplemented is returned by every entry point whose engine has not
@@ -70,30 +73,73 @@ type Options struct {
 	Key            string
 	KeyURL         string
 	AllowDowngrade bool
+	Interval       time.Duration
 	// Service is the "service <verb>" subcommand when one was given.
 	Service string
 }
 
-// Run parses upkeep's own flags out of os.Args, strips them so the program's
-// own flag parsing never sees them, and returns what it found. When the
-// engine lands, Run will also start the background loop for --auto-update
-// and handle the service subcommands before returning.
+var current *Updater
+
+// Run parses upkeep's own flags out of os.Args and strips them so the
+// program's own flag parsing never sees them. With --update-check it checks
+// the manifest once, right now, and applies what it finds; with
+// --auto-update it does the same on an interval in the background. Either
+// way it returns and the program carries on; a successful update replaces
+// the process image, so there is no "after" for the old version.
 //
 // Without --auto-update, --update-check or a service subcommand, Run does
 // nothing: updating is consent, and its absence is the off switch.
 func Run(cfg Config) Options {
+	argv := append([]string(nil), os.Args...)
 	opts, rest := parseArgs(os.Args[1:])
 	os.Args = append(os.Args[:1], rest...)
 	if opts.Channel == "" {
 		opts.Channel = "stable"
 	}
+	if opts.Interval == 0 {
+		opts.Interval = defaultInterval
+	}
+	if !opts.AutoUpdate && !opts.CheckOnce {
+		return opts
+	}
+	if cfg.Manifest == "" && opts.ManifestURL == "" {
+		log.Printf("upkeep: no manifest URL configured; --auto-update ignored")
+		return opts
+	}
+	u, err := newUpdater(cfg, opts, argv)
+	if err != nil {
+		log.Printf("upkeep: %v", err)
+		return opts
+	}
+	current = u
+	ok := u.reconcile()
+	if opts.CheckOnce {
+		u.once(context.Background())
+	}
+	if opts.AutoUpdate && ok {
+		go u.loop(context.Background(), opts.Interval)
+	}
 	return opts
 }
 
-// Apply updates to a target the program learned about through its own
-// control channel, running the same engine as the background loop.
+// Apply updates to a version the program learned about through its own
+// control channel. The version must be listed in the manifest's assets;
+// the channel pointer is not consulted. On success the process image is
+// replaced and Apply never returns.
 func Apply(ctx context.Context, version string) error {
-	return ErrNotImplemented
+	u := current
+	if u == nil {
+		return errors.New("upkeep: Run was not called, or updates are not enabled")
+	}
+	d, err := u.Check(ctx)
+	if err != nil {
+		return err
+	}
+	a, ok := d.Manifest.Assets[version][u.target]
+	if !ok {
+		return fmt.Errorf("upkeep: manifest has no %s asset for %s", u.target, version)
+	}
+	return u.Apply(ctx, &Decision{Manifest: d.Manifest, Version: version, Asset: a, Update: true, Reason: "requested"})
 }
 
 // Inherited returns the descriptors a previous process handed over through
@@ -135,6 +181,10 @@ func parseArgs(args []string) (Options, []string) {
 			o.KeyURL = next()
 		case "--allow-downgrade":
 			o.AllowDowngrade = true
+		case "--update-interval":
+			if d, err := time.ParseDuration(next()); err == nil {
+				o.Interval = d
+			}
 		case "service":
 			if i == 0 && i+1 < len(args) {
 				o.Service = args[i+1]
