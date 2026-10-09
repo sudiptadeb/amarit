@@ -16,6 +16,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -52,7 +53,7 @@ func main() {
 	case "logs":
 		err = logs(os.Args[2:])
 	case "version", "-version", "--version":
-		fmt.Println(version)
+		fmt.Println(buildVersion())
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -66,6 +67,18 @@ func main() {
 }
 
 var version = "dev"
+
+// buildVersion is the -X stamp when a release set one, else the module
+// version `go install` recorded, else "dev".
+func buildVersion() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
+		return bi.Main.Version
+	}
+	return version
+}
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `amarit: keep it alive, keep it current.

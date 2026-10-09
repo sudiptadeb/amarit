@@ -25,24 +25,52 @@ program can use either without the other.
 > roadmap. [docs/design.md](docs/design.md) is the proposal,
 > [docs/spec.md](docs/spec.md) the manifest format.
 
-## Keep it alive
+## Install amarit
 
 ```sh
 go install github.com/sudiptadeb/amarit/cmd/amarit@latest
+```
 
-amarit install                                  # the daemon, as a LaunchAgent / systemd user unit, else detached
-sudo "$(command -v amarit)" install --system    # or: at boot, nobody logged in; after this, no more sudo
-                                                # (sudo has its own PATH, so name the binary)
+That puts the binary in `$(go env GOPATH)/bin`, normally `~/go/bin`. Make sure
+it is on your PATH (add `export PATH="$HOME/go/bin:$PATH"` to `~/.zshrc` or
+`~/.bashrc`), then:
 
-amarit run termulaa -rc           # keep it running; restarted on failure, logs kept
+```sh
+amarit version
+```
+
+Prebuilt binaries and a `curl | sh` installer come with the first release.
+
+## Keep it alive
+
+Install the daemon once per machine. It picks the strongest persistence the
+machine allows and says which it took:
+
+```sh
+sudo "$(command -v amarit)" install --system    # recommended: starts at boot with nobody logged in;
+                                                # after this, nothing below needs sudo
+amarit install                                  # without sudo: LaunchAgent / systemd user unit when the
+                                                # account has one, else a detached daemon (no reboot survival)
+```
+
+`sudo` has its own PATH, which is why the first form names the binary. The
+daemon runs as you, not as root, and keeps its units in `~/.amarit/`.
+
+Then keep anything running:
+
+```sh
+amarit run termulaa -rc           # unit "termulaa-rc": restarted on failure, logs kept, survives reboots
+amarit run -name tunnel ssh -N -R 7900:127.0.0.1:7900 vps
 amarit ls
 amarit logs -f termulaa-rc
 amarit stop termulaa-rc | start | rm
+amarit uninstall
 ```
 
 A unit is a JSON file in `~/.amarit/units/`; the daemon picks changes up
 within seconds. Stopping the daemon never stops its units, and a new daemon
-adopts them.
+adopts them. The daemon never touches a binary: updates are the program's
+own business, below.
 
 ## Keep it current
 
