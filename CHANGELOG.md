@@ -1,5 +1,33 @@
 # Changelog
 
+## v0.5.2
+
+A `go install` build configures itself: one resolution of the
+configuration, an embedded `amarit.json`, the module version as the
+fallback.
+
+- **`amarit.ProjectFile(data)`.** A program that cannot be built with
+  linker flags (`go install`) embeds its `amarit.json` and hands it to
+  Start; the same file `amarit stamp` puts in, by another door. A program
+  with no file says the same values with the existing options.
+- **One resolution.** Every layer meets in one function, later winning:
+  the module version Go recorded in the binary, the stamped file, options
+  in code in the order given, the environment, the command line.
+  `--update-url` and `--update-key` are part of it now rather than read by
+  the engine on the side. Nothing is derived from a module path or a
+  hosting convention.
+- **The version falls back to the module.** With no stamp and no
+  `amarit.Version`, the version is `debug.ReadBuildInfo`'s main module
+  version, so any `go install` build knows what it runs.
+  `amarit.BuildVersion()` returns it for the program's own banner.
+- **The daemon declares its own project in code.** `go install
+  .../cmd/amarit@v0.5.2` now updates itself like a release build. The
+  three facts are repeated from the root `amarit.json` (embed cannot reach
+  it from `cmd/amarit`) and a test fails when they drift.
+- Versions are compared, never bytes: a `go install` build of the released
+  version is current and is not replaced by the release asset; an older one
+  takes the next release once.
+
 ## v0.5.1
 
 amarit uses amarit: the daemon keeps itself current.

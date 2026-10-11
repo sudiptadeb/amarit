@@ -119,10 +119,26 @@ than the running process.
 
 A consumer hardcodes nothing. `amarit.json` at the repository root carries
 the project name, manifest URL, optional key, restart strategy and service
-description (spec section 8). `amarit release` reads it to build the manifest
-and stamps it into the binary with two linker variables; the program calls
-`amarit.Start()` and is done. A plain `go build` during development has no
-stamp, so the same code path is inert there.
+description (spec section 8). `amarit release` reads it to build the
+manifest; the binary carries it either stamped in with two linker variables
+(`amarit stamp`) or embedded by the program and handed to
+`amarit.ProjectFile`, which is the way for a project installed with `go
+install`, where no linker flags exist. A program may instead say the same
+values as options in code. All of them meet in one function, `resolve`,
+which lays the layers over each other in a fixed order: the module version
+Go recorded in the binary, the stamp, the options as given, the
+environment, the command line. The stamp is applied through `ProjectFile`,
+so a file reaches the Config by one path whatever carried it. Nothing is
+derived: the module path and the hosting convention could suggest a
+releases URL, and the library refuses to guess one; a build that was given
+no URL is inert, and says so only when asked.
+
+The version has one more source than the rest: when neither the stamp nor
+code sets it, `debug.ReadBuildInfo` supplies the module version Go
+recorded (`v0.5.2` for `go install ...@v0.5.2`, a pseudo-version or a tag
+with `+dirty` for a build inside a checkout). That is reading a fact the
+toolchain wrote, not a guess, and it is what lets any `go install` build
+know where it stands.
 
 ## Keep-alive tier
 
@@ -250,8 +266,9 @@ service stack. There, `AMARIT_AUTO_UPDATE=0` in the unit and
 ### The daemon updates itself
 
 The daemon is a long-running program like any it supervises, so it uses the
-library: amarit's own `amarit.json` declares `auto_update` and the release
-build stamps it in. The restart is the in-place exec, which is what makes it
+library: it declares `auto_update` its default, as amarit's own
+`amarit.json` does (how the two stay one is the next section). The restart
+is the in-place exec, which is what makes it
 safe under the one supervisor the daemon has: launchd on the headless Mac
 cannot follow a pid change, and the exec keeps the pid. It also keeps the
 units' parentage, which surfaced one bug: the adopted-process watcher polled
@@ -266,6 +283,40 @@ never lands in the middle of a stop. Only `amarit daemon` runs the engine;
 the short commands have nothing to keep current and no business marking a
 binary healthy. The first installed daemon predates all this and is
 replaced by hand once; after that the channel carries it.
+
+### The daemon's own configuration
+
+`go install github.com/sudiptadeb/amarit/cmd/amarit@latest` is the
+documented install, and it cannot pass linker flags, so until v0.5.2 such a
+daemon had no project, no releases URL, and never updated. The library's
+answer for any project is to embed `amarit.json`; amarit itself cannot take
+it as written. `amarit.json` belongs at the repository root, where
+`amarit release` and every other project's file sit, and Go's `embed` only
+reaches a package's own directory and below: `cmd/amarit` cannot embed
+`../../amarit.json`, and the root package, which is the library, must not
+carry amarit's project configuration into every program that imports it.
+
+Four options were weighed. Moving the file into `cmd/amarit` puts amarit's
+own file in a different place from the one it tells every other project to
+use. A `go generate` copy into `cmd/amarit` is a second file in the tree
+that a reader has to know is derived, and a step to forget. Deriving the
+releases URL from the module path would work for amarit and is exactly the
+magic the library refuses to do for anyone else. So the daemon repeats the
+three facts the binary needs, project, releases URL and `auto_update`, as
+options in code, and `TestSelfConfigMatchesProjectFile` compares them with
+the parsed root file, every field, so a key or an interval added to the
+file alone fails the build. A release build still stamps the file in, and
+the two agree. The duplication is three constants and one test; that was
+judged smaller than a second file or a guess.
+
+The hash tier compares versions, never bytes. A `go install` build of
+`v0.5.2` is not the release asset for 0.5.2 byte for byte, and the engine
+does not care: same version, "already on", nothing swapped. An older
+`go install` build takes the next release once and is a release build from
+then on. Proven on a scratch daemon before v0.5.2 shipped: a `go install`
+build at 0.5.2 against a channel at 0.5.2 checked and stayed; the channel
+moved to 0.5.3 and it execd in place, same pid, its unit's pid unchanged,
+and reported "already on 0.5.3" at every check after.
 
 ### Log rotation while running
 

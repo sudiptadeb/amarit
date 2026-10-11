@@ -115,24 +115,25 @@ The daemon never touches a unit's binary: updates are the program's own
 business, below.
 
 The daemon does keep *itself* current, using the library like any other
-program: amarit's own `amarit.json` declares auto-update its default, so a
-release build checks
+program: it declares auto-update its default (amarit's own `amarit.json`
+says the same), so `amarit daemon` checks
 [amarit's releases](https://github.com/sudiptadeb/amarit/releases) hourly,
 verifies, swaps the binary and restarts in place. The pid does not change,
 launchd or systemd notice nothing, and the units stay its children and are
 adopted with their pids; a version that cannot come up three times is
-rolled back. The log says so: `amarit v0.5.1: daemon 4745 supervising
-...` and `auto-update on: amarit 0.5.1, channel stable, every 1h0m0s`.
+rolled back. The log says so: `amarit v0.5.2: daemon 4745 supervising
+...` and `auto-update on: amarit 0.5.2, channel stable, every 1h0m0s`.
 `AMARIT_AUTO_UPDATE=0` in the job's environment, or `amarit daemon
 --no-auto-update`, turns it off. Only the daemon checks; `amarit ls` and
 the other short commands run whatever is installed. A `go install` build
-has no stamp and never updates itself; the prebuilt binaries do, and a
-later `go install` over one of them puts an inert build back.
+knows its version from the module Go recorded in it and updates the same
+way: it takes the next release, not the one it already is.
 
 ## Keep it current
 
-An `amarit.json` at the repository root is the only configuration; nothing
-is hardcoded in the program:
+An `amarit.json` at the repository root is the project's configuration,
+read by `amarit release` to write the manifest and carried by the binary
+so it knows where to look:
 
 ```json
 {
@@ -146,21 +147,41 @@ is hardcoded in the program:
 }
 ```
 
+The file reaches the binary one of two ways, the author's choice. Stamped
+at build, so the program needs nothing but the one call:
+
 ```go
 import "github.com/sudiptadeb/amarit"
 
 func main() {
-    amarit.Start() // reads the stamped amarit.json; inert in a plain `go build`
+    amarit.Start() // reads the stamped amarit.json
     // the program as before
 }
 ```
-
-Build with the stamp and publish the manifest beside the release assets:
 
 ```sh
 go build -ldflags "$(amarit stamp -version 0.5.3)" ./cmd/app
 amarit release -version 0.5.3 -dist release        # writes releases.json
 ```
+
+Or embedded by the program itself, for a project whose users install it
+with `go install`, which passes no linker flags; the version is then the
+module version Go records in every such build:
+
+```go
+//go:embed amarit.json           // a copy of the file next to main, or the file itself if main lives at the root
+var projectFile []byte
+
+func main() {
+    amarit.Start(amarit.ProjectFile(projectFile))
+}
+```
+
+A program with no `amarit.json` at all says the same things in code:
+`amarit.Start(amarit.Project("app"), amarit.Releases(url), amarit.Version(v))`.
+Whatever carried them, the values meet in one place; nothing is derived
+from a module path or a hosting convention. A build that carries none of
+them is inert and says so when asked (`app update --check`).
 
 Then every installed copy can update itself:
 
@@ -182,12 +203,14 @@ re-adopts after the restart. The new process reads them once with
 `amarit.InheritedValues()`; the variable is cleared so nothing it starts
 sees them.
 
-Four layers control the result, later ones winning: the stamped file,
-options in code (`amarit.Interval(5*time.Minute)`, `amarit.Key(k)`, ...),
-the environment, the command line. So `"interval": "5m"` in `amarit.json`
-is the program's own cadence, `AMARIT_UPDATE_INTERVAL=30m` in a unit's
-environment changes it for that install, and `--update-interval` wins for
-one run.
+The layers, later ones winning: the module version Go recorded in the
+binary (the version only), the stamped file, options in code in the order
+given (`amarit.ProjectFile(data)`, `amarit.Interval(5*time.Minute)`,
+`amarit.Key(k)`, ...), the environment, the command line. So `"interval":
+"5m"` in `amarit.json` is the program's own cadence,
+`AMARIT_UPDATE_INTERVAL=30m` in a unit's environment changes it for that
+install, and `--update-interval` wins for one run. `amarit.BuildVersion()`
+is the version the build carries, for the program's own banner.
 
 Whether the loop runs at all follows the same layers. Auto-update is off
 unless somebody said otherwise, and nothing is detected: a project that

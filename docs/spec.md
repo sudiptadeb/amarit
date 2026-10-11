@@ -138,7 +138,7 @@ One sidecar directory beside the binary, `<bin>.amarit/`:
 ## 8. Project configuration: `amarit.json`
 
 One JSON file at the repository root, read by `amarit release` to build the
-manifest and stamped into the binary so the program hardcodes nothing:
+manifest and carried by the binary so the program hardcodes nothing:
 
 ```json
 {
@@ -171,7 +171,15 @@ manifest and stamped into the binary so the program hardcodes nothing:
 | `release.targets` | the `os/arch` list the release tool builds and lists in the manifest |
 | `release.asset`, `release.url` | the asset file name and its download URL, as patterns with `{version}`, `{os}`, `{arch}` and (in `url`) `{asset}`. `url` is optional; its default `{asset}` names the file beside the manifest |
 
-The stamp is two linker variables on the `amarit` package:
-`stampedProject` (base64 of the file) and `stampedVersion`. A build without them
-is a development build; `amarit.Start()` then does nothing and says so only
-when asked (`--update-check`).
+The file reaches the binary either as a stamp, two linker variables on the
+`amarit` package (`stampedProject`, base64 of the file, and
+`stampedVersion`), or as bytes the program embeds and hands to
+`amarit.ProjectFile`; a program may also give the same values as options in
+code with no file. The client resolves them in one pass, later layers
+winning: the module version Go recorded in the binary (version only), the
+stamp, the options in order, the environment, the command line. A build
+that carries no project or releases URL is a development build;
+`amarit.Start()` then does nothing and says so only when asked
+(`--update-check`). The client compares versions, never bytes: a build of
+the released version made by other means (`go install`) is current and is
+not replaced by the release asset.
