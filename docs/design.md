@@ -127,6 +127,88 @@ excluded exit codes, a run-flag file, throttle, log rotation, stray detection
 that replaces only processes amarit started itself, and a `status` that reports
 installed, loaded, running, healthy, and running-older-than-installed.
 
+## Daemon decisions
+
+What a real stack asked for (a web server, identical workers, a model
+server owning a large child process) and how the daemon answers, with the
+alternatives that were not taken.
+
+### Process groups, with a per-unit grace
+
+Units already start in their own session (`Setsid`), so the unit's pid is its
+process-group id. A stop signals the group, waits `stop_timeout` (default
+10 s) for every member to leave, then kills the group. Before this only the
+pid was signalled and a program that spawned its own children left them
+behind holding memory and ports. The same treatment goes to children a
+crashed program leaves behind, and to processes a new daemon adopted, since
+only the group id is needed. cgroups would be exact but are Linux-only;
+a process group is what every Unix has.
+
+### Resource limits by re-exec
+
+A process can change only its own limits, and Go cannot set them for a child
+alone. Rather than a C wrapper or a shell `ulimit` (which needs a shell and
+changes argv[0]), the daemon starts a unit that has `limits` through its own
+binary: `amarit __exec <binary> [args...]` with the limits in
+`AMARIT_LIMITS`. The helper applies them, clears the variable and `exec`s
+the program, so the limit reaches that program alone and the pid the daemon
+watches is the program's own. launchd gives services 256 open files, which
+Go restores for children even though it raises its own, so the plist
+`amarit install` writes raises the soft limit to 65536 and a unit's
+`limits` goes higher. Only `nofile` is implemented; others follow when
+someone needs one.
+
+### Deliberate restarts
+
+The CLI and the daemon talk through files, as everything else does: a unit
+file is wanted state, a status file is observed state. `amarit restart`
+drops `run/<name>.restart`; the daemon takes the requests on its next poll,
+stops those groups together and starts them fresh with the backoff reset and
+the restart counter untouched, since the operator asked. A rolling restart
+is the CLI pacing its requests: one unit, wait until it runs and has stayed
+up two seconds, then the next; a unit that exits instead ends the roll with
+an error. No socket or RPC was added for this.
+
+### Double-supervision guard
+
+Two supervisors for one program restart it in turns, forever; a real
+deployment logged 629 restarts that way. `amarit run` and `amarit start`
+read the launchd plists and systemd unit files on disk and compare their
+program path to the unit's binary, symlinks resolved. A hit names the job
+and the command that removes it; `-force` overrides. Reading files is cheap
+and works without a running service manager; querying `launchctl print`
+for every job or `systemctl show` would be slower and would only see what
+is loaded right now. The probe is best effort and never fails the command.
+
+### Instances
+
+`"instances": N` runs N copies named `<name>@1` .. `<name>@N`; each gets
+`AMARIT_INSTANCE` and `{instance}` expanded in args and env values, which is
+all a worker needs to tell itself apart. The names are the daemon's keys
+everywhere (status, logs, restart requests), so no second notion of
+identity exists. The unit file describes the set; stopping one member is a
+marker in `run/`, not a per-instance field, so the file stays a description
+of what you want. Scaling down stops the highest numbers first.
+
+### Value handoff
+
+Descriptor handoff carries what the kernel can carry. A program that owns a
+child process (a model server and its engine) also needs the child's pid
+and port after an in-place update, or it would start a second engine.
+`HandoffValues` sends a map of small strings in one environment variable,
+base64 JSON; `InheritedValues` reads it once and clears it so grandchildren
+never see it. Same shape as `Handoff`/`Inherited`, and nothing more: the
+values are strings, the program decides what they mean.
+
+### Log rotation while running
+
+The program holds the log descriptor, so the file cannot be renamed away
+from it. Past 10 MB the daemon copies the file to `<log>.1` and truncates
+it in place; the descriptor was opened with `O_APPEND`, so the program's
+next line lands at the start of the emptied file. A line written during the
+copy can be lost, which is the price of not asking programs to reopen their
+logs. The check is one `stat` per running unit per poll.
+
 ## Consumers, in order
 
 1. A stateless tunnel agent on a canary channel.

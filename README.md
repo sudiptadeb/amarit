@@ -20,9 +20,10 @@ amarit is two small things that belong together:
 The two never overlap: the library updates, the daemon keeps alive. A
 program can use either without the other.
 
-> Status: early. The hash tier of updates and the daemon work end to end;
-> descriptor handoff, signing, the enterprise tier and Windows follow the
-> roadmap. [docs/design.md](docs/design.md) is the proposal,
+> Status: early. The hash tier of updates, descriptor and value handoff
+> across the restart, and the daemon work end to end; signing, the
+> enterprise tier and Windows follow the roadmap.
+> [docs/design.md](docs/design.md) is the proposal and the reasoning,
 > [docs/spec.md](docs/spec.md) the manifest format.
 
 ## Install amarit
@@ -39,7 +40,8 @@ it is on your PATH (add `export PATH="$HOME/go/bin:$PATH"` to `~/.zshrc` or
 amarit version
 ```
 
-Prebuilt binaries and a `curl | sh` installer come with the first release.
+Prebuilt binaries for macOS and Linux are attached to each
+[release](https://github.com/sudiptadeb/amarit/releases).
 
 ## Keep it alive
 
@@ -59,18 +61,56 @@ daemon runs as you, not as root, and keeps its units in `~/.amarit/`.
 Then keep anything running:
 
 ```sh
-amarit run termulaa -rc           # unit "termulaa-rc": restarted on failure, logs kept, survives reboots
+amarit run web -serve                          # unit "web-serve": restarted when it exits, logs kept, survives reboots
+amarit run -name worker -instances 4 worker    # four copies: worker@1 .. worker@4
 amarit run -name tunnel ssh -N -R 7900:127.0.0.1:7900 vps
 amarit ls
-amarit logs -f termulaa-rc
-amarit stop termulaa-rc | start | rm
+amarit logs -f worker@2
+amarit restart 'worker@*' -rolling             # one at a time; each must stay up 2 s before the next goes
+amarit stop worker@3 | start worker | rm web-serve
 amarit uninstall
 ```
 
-A unit is a JSON file in `~/.amarit/units/`; the daemon picks changes up
-within seconds. Stopping the daemon never stops its units, and a new daemon
-adopts them. The daemon never touches a binary: updates are the program's
-own business, below.
+A unit is a JSON file in `~/.amarit/units/`; `amarit run` writes a plain
+one, and you can edit it (then `amarit restart <name>` to apply). The
+daemon picks changes up within seconds. Everything a unit can say:
+
+```json
+{
+  "name": "worker",
+  "binary": "/usr/local/bin/worker",
+  "args": ["-id", "{instance}", "-model", "http://127.0.0.1:8090"],
+  "env": {"WORKER_ID": "w{instance}", "AMARIT_AUTO_UPDATE": "0"},
+  "env_file": "/etc/worker.env",
+  "dir": "/var/lib/worker",
+  "instances": 8,
+  "restart": "on-failure",
+  "no_restart_exit": [3],
+  "stop_timeout": "60s",
+  "limits": {"nofile": 65536}
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `instances` | run N copies, named `worker@1` .. `worker@N` in `ls`, logs and status. Each gets `AMARIT_INSTANCE=<i>`, and `{instance}` in `args` and `env` values becomes its number. Change the number and the daemon adds or removes copies, highest numbers first. `stop`, `start`, `restart` and `logs` take `worker` (every copy) or `worker@3` |
+| `restart` | `always` (default), `on-failure`, or `never`; `no_restart_exit` lists exit codes that mean "leave it down". Restarts back off from 1 s to 1 min; a deliberate `amarit restart` resets that and is not counted |
+| `stop_timeout` | a stop or restart sends SIGTERM to the program's whole process group, its own children included, waits this long (default `10s`), then SIGKILLs whatever is left. Children a crashed program leaves behind are stopped the same way |
+| `limits` | resource limits for the program; `nofile` is the open-files limit. Set from inside the process by starting it through amarit itself, so the pid is still the program's. A value above the hard limit takes the hard limit and says so in the log |
+| `env`, `env_file`, `dir` | extra environment, a file of `KEY=VALUE` lines read at start, the working directory |
+
+Every unit also gets `AMARIT_MANAGED=1` and `AMARIT_UNIT=<name>`. Output
+goes to `~/.amarit/logs/<name>.log`, rotated at 10 MB with one previous
+file kept, while the program runs.
+
+`amarit run` and `amarit start` look for a launchd job or systemd unit that
+already runs the same binary and refuse, naming it and the command that
+removes it: two supervisors for one program restart it in a loop. `-force`
+overrides when you mean it.
+
+Stopping the daemon never stops its units, and a new daemon adopts them.
+The daemon never touches a binary: updates are the program's own business,
+below.
 
 ## Keep it current
 
@@ -118,6 +158,11 @@ A stateful program adds hooks: `amarit.Start(amarit.Handoff(fds), amarit.Drain(f
 `Handoff` returns the descriptors (listeners, PTY masters) that must survive
 the restart; the new process gets them back from `amarit.Inherited()` with
 the names it gave them, so an update keeps every connection and terminal.
+`amarit.HandoffValues(fn)` carries small named strings the same way, for
+what is not a descriptor: the pid and port of a child process the program
+re-adopts after the restart. The new process reads them once with
+`amarit.InheritedValues()`; the variable is cleared so nothing it starts
+sees them.
 
 Four layers control the result, later ones winning: the stamped file,
 options in code (`amarit.Interval(5*time.Minute)`, `amarit.Key(k)`, ...),
@@ -164,7 +209,8 @@ Full format: [docs/spec.md](docs/spec.md).
 
 ## Roadmap
 
-Overlap restart → signed and enterprise tiers →
-`amarit install` adopting a program's own service → Windows → spec 1.0.
+Overlap restart → signed and enterprise tiers → unit health probes
+(`service.health`) → `amarit install` adopting a program's own service →
+Windows → spec 1.0.
 
 MIT. See [LICENSE](LICENSE).
