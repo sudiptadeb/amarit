@@ -121,8 +121,8 @@ release build checks
 verifies, swaps the binary and restarts in place. The pid does not change,
 launchd or systemd notice nothing, and the units stay its children and are
 adopted with their pids; a version that cannot come up three times is
-rolled back. The log says so: `amarit v0.5.0: daemon 4745 supervising
-...` and `auto-update on: amarit 0.5.0, channel stable, every 1h0m0s`.
+rolled back. The log says so: `amarit v0.5.1: daemon 4745 supervising
+...` and `auto-update on: amarit 0.5.1, channel stable, every 1h0m0s`.
 `AMARIT_AUTO_UPDATE=0` in the job's environment, or `amarit daemon
 --no-auto-update`, turns it off. Only the daemon checks; `amarit ls` and
 the other short commands run whatever is installed. A `go install` build

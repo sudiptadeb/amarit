@@ -1,10 +1,8 @@
 # Changelog
 
-## v0.5.0
+## v0.5.1
 
-amarit uses amarit: the daemon keeps itself current. And a service can be
-updated from the machine it is built on: a local release directory, one
-command that brings every unit onto it, rollback when the restart fails.
+amarit uses amarit: the daemon keeps itself current.
 
 - **A project may make auto-update its default.** `"auto_update": true` in
   `amarit.json` (or `amarit.AutoUpdate(true)` in code) turns the loop on for
@@ -29,6 +27,13 @@ command that brings every unit onto it, rollback when the restart fails.
   children, and the adopted-process watcher polled `kill(pid, 0)`, which a
   zombie answers, so a unit that exited would have looked alive forever.
   The watcher reaps its own children and reports their real exit status.
+
+## v0.5.0
+
+Update a service from the machine it is built on: a local release
+directory, one command that brings every unit onto it, rollback when the
+restart fails.
+
 - **`amarit update [-check] [-rolling] [unit|glob ...]`.** Runs each
   program's own `<binary> update` once per binary, however many units share
   it, then restarts the units whose binary changed; `-rolling` one instance
