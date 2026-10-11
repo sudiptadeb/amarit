@@ -22,19 +22,32 @@ import (
 
 const label = "com.amarit.daemon"
 
+// amarit's own project configuration: what amarit.json at the repository
+// root says, repeated here. Go's embed cannot reach up to that file from
+// this package, and the library package must not carry amarit's own project
+// into every program that imports it, so the daemon says these three facts
+// in code; TestSelfConfigMatchesProjectFile fails when the two drift. A
+// release build also stamps the file in, and the two agree.
+const (
+	selfProject    = "amarit"
+	selfReleases   = "https://github.com/sudiptadeb/amarit/releases/latest/download/releases.json"
+	selfAutoUpdate = true
+)
+
 // daemon is what the service manager (or a detached start) runs. It is the
-// one amarit command that keeps itself current: a release build carries
-// amarit.json with auto_update on, so the daemon checks amarit's own
-// releases and execs the new version in place. The pid stays, launchd or
-// systemd notice nothing, and the units stay its children and are adopted
-// (the short-lived commands never check; they run whatever is installed).
-// --no-auto-update or AMARIT_AUTO_UPDATE=0 in the job's environment turns
-// it off; a plain `go install` build has no stamp and never checks.
+// one amarit command that keeps itself current: it declares auto_update on,
+// so the daemon checks amarit's own releases and execs the new version in
+// place. The pid stays, launchd or systemd notice nothing, and the units
+// stay its children and are adopted (the short-lived commands never check;
+// they run whatever is installed). --no-auto-update or AMARIT_AUTO_UPDATE=0
+// in the job's environment turns it off. A `go install` build knows its
+// version from the module and updates like a release build.
 func daemon(args []string) error {
 	base := amarit.DefaultBase()
 	d := amarit.NewDaemon(base)
 	d.Version = buildVersion()
-	amarit.Start(amarit.Healthy(d.Preflight), amarit.Drain(d.Drain))
+	amarit.Start(amarit.Project(selfProject), amarit.Releases(selfReleases), amarit.AutoUpdate(selfAutoUpdate),
+		amarit.Healthy(d.Preflight), amarit.Drain(d.Drain))
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
 	if err := fs.Parse(os.Args[2:]); err != nil { // Start stripped its own flags
 		return err

@@ -17,7 +17,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -74,18 +73,14 @@ func main() {
 	}
 }
 
-var version = "dev"
-
-// buildVersion is the -X stamp when a release set one, else the module
-// version `go install` recorded, else "dev".
+// buildVersion is what the library resolved for this build (the stamp, else
+// the module version `go install` recorded), so the banner and the updater
+// never disagree; "dev" when neither is there.
 func buildVersion() string {
-	if version != "dev" {
-		return version
+	if v := amarit.BuildVersion(); v != "" {
+		return "v" + v
 	}
-	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" && bi.Main.Version != "(devel)" {
-		return bi.Main.Version
-	}
-	return version
+	return "dev"
 }
 
 func usage() {

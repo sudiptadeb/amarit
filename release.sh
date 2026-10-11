@@ -15,7 +15,7 @@ rm -rf "$DIST" && mkdir -p "$DIST"
 STAMP=$(go run ./cmd/amarit stamp -version "$VERSION")
 for target in $(sed -n 's/.*"targets": \[\(.*\)\].*/\1/p' amarit.json | tr -d '",'); do
 	GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -trimpath \
-		-ldflags "$STAMP -X main.version=$VERSION" \
+		-ldflags "$STAMP" \
 		-o "$DIST/amarit-${target%/*}-${target#*/}" ./cmd/amarit
 done
 (cd "$DIST" && shasum -a 256 amarit-* > SHA256SUMS)
