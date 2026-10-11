@@ -3,6 +3,7 @@
 //
 //	amarit stamp   [-config amarit.json] -version 0.5.3
 //	amarit release [-config amarit.json] -version 0.5.3 -dist dist [-channel stable] [-out releases.json]
+//	amarit update  [-check] [-rolling] [unit|glob ...]
 package main
 
 import (
@@ -50,6 +51,8 @@ func main() {
 		err = start(os.Args[2:])
 	case "restart":
 		err = restart(os.Args[2:])
+	case "update":
+		err = update(os.Args[2:])
 	case "rm":
 		err = named(os.Args[2:], amarit.DefaultBase().RemoveUnit)
 	case "logs":
@@ -102,6 +105,12 @@ keep it alive (this machine):
   amarit restart <unit|glob>... [-rolling]
                                    restart units now (web-*, worker@*); -rolling does one
                                    at a time and waits for each to stay up before the next
+  amarit update [-check] [-rolling] [unit|glob ...]
+                                   bring units onto the release their manifest points at: runs
+                                   '<binary> update' once per binary, then restarts the units
+                                   whose binary changed (-rolling as above); no names = every
+                                   unit whose program was built with amarit; -check only reports;
+                                   if the restart fails the previous binary is put back
   amarit rm <unit>
   amarit uninstall
 
