@@ -129,6 +129,98 @@ the other short commands run whatever is installed. A `go install` build
 knows its version from the module Go recorded in it and updates the same
 way: it takes the next release, not the one it already is.
 
+## Who runs as whom
+
+amarit grants no privilege you did not have. The daemon and every unit run
+as the user who installed it, never as root; root is used once, to register
+the daemon with the init system, and not again.
+
+```text
+init system: launchd / systemd                        runs as root
+  |
+  +-- service file, root-owned, names a user
+  |     /Library/LaunchDaemons/com.amarit.daemon.plist   UserName=you
+  |     /etc/systemd/system/amarit-you.service           User=you
+  |
+  +--> amarit daemon                                    runs as you
+         reads  ~/.amarit/units/      (wanted state)
+         writes ~/.amarit/run/, logs/ (observed state)
+         |
+         +--> units: web, worker@1..4, tunnel            run as you
+
+  amarit run | stop | restart | update   --writes-->   ~/.amarit/
+  (the CLI, as you; no socket, no port, no RPC)
+```
+
+| | `install` writes | owner | daemon runs as | survives a reboot with nobody logged in | sudo afterwards |
+|---|---|---|---|---|---|
+| macOS, `sudo amarit install --system` | `/Library/LaunchDaemons/com.amarit.daemon.plist`, `UserName=<you>` | root:wheel, 0644 | you | yes | only to remove the plist |
+| macOS, `amarit install` | `~/Library/LaunchAgents/com.amarit.daemon.plist` | you | you | no: starts at login. With no desktop session (SSH into a headless Mac) a detached daemon is started instead | no |
+| Linux, `sudo amarit install --system` | `/etc/systemd/system/amarit-<you>.service`, `User=<you>` | root, 0644 | you | yes | only to remove the unit |
+| Linux, `amarit install` | `~/.config/systemd/user/amarit.service`, then `loginctl enable-linger <you>` | you | you | yes if lingering could be enabled; else the daemon stops at logout and the command prints the `loginctl` line to run | no |
+| other | nothing: `install` refuses; `amarit run` starts a detached daemon | | you | no | no |
+
+**`sudo amarit install --system`.** On macOS it writes the plist above,
+owned by root as launchd requires, with `UserName` set to the account that
+ran sudo, `HOME` and `AMARIT_HOME` pointing at that account's home, and
+`ProgramArguments` naming the amarit binary that ran the install, symlinks
+resolved (normally `~/go/bin/amarit`, owned by you). On Linux it writes the
+unit above with `User=`, the same two environment variables, `ExecStart=<that
+binary> daemon`, `Restart=always`, enabled for `multi-user.target`. It needs
+`SUDO_USER`: run as plain root, or with `SUDO_USER=root`, it refuses, because
+there is no user to name. `sudo amarit uninstall` removes the LaunchDaemon;
+on Linux the system unit is removed by hand today (`sudo systemctl disable
+--now amarit-<you>`, then delete the file).
+
+**`amarit install`** without sudo takes what the account has: a LaunchAgent
+when launchd has a session for your uid, a systemd user unit when
+`systemctl --user` answers, with `loginctl enable-linger` attempted after it.
+When neither is there, and when `amarit run` finds no daemon, it starts one
+detached in its own session: that survives the terminal, not a reboot.
+
+**Who the daemon runs as.** The installing user, in every form above.
+Nothing refuses a daemon started as root by hand today (`sudo amarit run`
+would create `/var/root/.amarit` and a detached root daemon); issue
+[#4](https://github.com/sudiptadeb/amarit/issues/4) adds that guard.
+
+**Who units run as.** The daemon's user. A unit has no user field. Each
+unit starts in its own session, so its pid is its process-group id and a
+stop reaches its children; a unit with `limits` is started through
+`amarit __exec`, which sets them and execs the program. `env` comes from the
+unit file, `env_file` is read at each start and never copied anywhere.
+
+**How the CLI talks to the daemon.** Through files in `~/.amarit`, nothing
+else: `units/<name>.json` is wanted state, `run/<name>.json` observed
+state, `run/<name>.restart` and `run/<name>.stopped` are requests,
+`daemon.pid` says who is running, `logs/<name>.log` is the output. The
+daemon polls every two seconds. There is no socket and no port, so the
+access rule is: whoever can write `~/.amarit` controls the daemon.
+
+**Self-update without sudo.** The daemon's binary and every unit's binary
+are files you own, so the library swaps them without root. That is safe
+because the root-owned service file runs the user-writable binary *as you*.
+The user line is the whole guarantee: were `UserName` or `User=` missing,
+launchd or systemd would run a binary you can write as root, and anything
+running as you could become root. amarit always writes the line and refuses
+to install without a user to put in it; #4 adds the second check, a daemon
+that refuses uid 0 and a `status` that warns about a service file with no
+user.
+
+**What it implies.** Whoever can write `~/.amarit/units` can make any
+program run persistently as you, across reboots, without sudo. That is the
+same power as your crontab or your shell's rc files, and it has the same
+owner. Secrets belong in `env_file`, which the daemon reads at exec; `env`
+is stored in the unit JSON. Today the directories are 0755 and the unit,
+run, pid and log files 0644, so another local account that can traverse
+your home can read them; issue
+[#5](https://github.com/sudiptadeb/amarit/issues/5) tightens them to
+0700/0600.
+
+**Other platforms.** On anything but macOS and Linux, `amarit install`
+refuses (with or without `--system`); `amarit run` starts a detached daemon
+as you, with no reboot survival. On Windows there are also no process
+groups, no `limits`, and no in-place self-update. Windows is on the roadmap.
+
 ## Keep it current
 
 An `amarit.json` at the repository root is the project's configuration,
