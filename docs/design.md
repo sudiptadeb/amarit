@@ -68,7 +68,8 @@ replacement on unsigned manifests hosted there.
 | amarit daemon | per-machine daemon and CLI for things that do not embed the library |
 | release tooling | `amarit release` and a GitHub Action: build matrix in, manifest out, optional signing on the maintainer's machine |
 
-No server is required. Static files on any HTTPS host are the default.
+No server is required. Static files on any HTTPS host are the default; a
+directory on the machine that runs the program works too.
 
 ## Update engine
 
@@ -199,6 +200,46 @@ and port after an in-place update, or it would start a second engine.
 base64 JSON; `InheritedValues` reads it once and clears it so grandchildren
 never see it. Same shape as `Handoff`/`Inherited`, and nothing more: the
 values are strings, the program decides what they mean.
+
+### `amarit update`
+
+The program updates itself; the daemon restarts it. `amarit update` runs
+`<binary> update` for each binary the chosen units run, then asks the
+daemon to restart the units whose binary changed. The daemon never
+downloads: the program's own update knows its manifest and target,
+verifies, smoke-tests, swaps and keeps prev, and that one code path runs
+whether a person, the auto-update loop or this command asks for it.
+Teaching the daemon the manifest would be a second updater with the same
+checks and a second home for the project configuration.
+
+Once per binary: eight workers on one file are one update. Units are
+grouped by their resolved binary path, and whether a program was built
+with amarit is read from the binary's own build info, so no unit field has
+to say so. Restart only on change: the binary's digest is taken before and
+after, and an unchanged file restarts nothing, which makes the command
+safe to run after every build.
+
+The library's three-starts rollback cannot cover this path: `<binary>
+update` execs the new version once, inside the command, where it reports
+healthy before the daemon has run it at all. So when the restart fails
+(an instance exits; a rolling restart stops) `amarit update` does the
+rollback itself: prev back as the binary, the rejected one kept as `bad`,
+the units restarted together, and a loud message. The same move the
+library makes, done by whoever saw the failure.
+
+### Shared binaries
+
+Instances of a unit are N processes on one file, each with auto-update on
+by default. Two of them applying the same release raced on the rename: the
+second deleted prev, which was the old binary, and put the new one there,
+so rollback would have restored the version being rolled back from. Apply
+holds a flock in the sidecar for the whole swap; a process that gets the
+lock after a sibling finds the attempt recorded and only restarts into
+what is on disk. The lock is a descriptor, so a crash, or the exec itself,
+releases it. The lock keeps the default safe; it does not make N
+restarts within the hour, each on its own jitter, a good shape for a
+service stack. There, `AMARIT_AUTO_UPDATE=0` in the unit and
+`amarit update -rolling` after the build is the recommendation.
 
 ### Log rotation while running
 

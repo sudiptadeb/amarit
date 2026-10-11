@@ -67,6 +67,7 @@ amarit run -name tunnel ssh -N -R 7900:127.0.0.1:7900 vps
 amarit ls
 amarit logs -f worker@2
 amarit restart 'worker@*' -rolling             # one at a time; each must stay up 2 s before the next goes
+amarit update [-rolling] [web-* ...]           # bring units built with amarit onto their latest release (below)
 amarit stop worker@3 | start worker | rm web-serve
 amarit uninstall
 ```
@@ -149,6 +150,7 @@ Then every installed copy can update itself:
 
 ```sh
 app update                        # check, verify, swap, restart, print the version, exit
+app update --check                # say what is available, change nothing
 app --auto-update[=canary]        # the same on a loop, hourly unless told otherwise
 app --update-url https://mirror/releases.json
 app --auto-update --update-interval 5m
@@ -172,6 +174,51 @@ environment changes it for that install, and `--update-interval` wins for
 one run. A program running as an amarit unit has auto-update on (the
 operator said "keep this current" by putting it there);
 `AMARIT_AUTO_UPDATE=0` in the unit's environment turns it off.
+
+Several processes on one binary (a unit with `instances`, or units that
+share a program) take turns through a lock beside the binary, so the file is
+swapped once; but each then restarts on its own schedule, within the hour.
+For a service stack, give such units `"AMARIT_AUTO_UPDATE": "0"` and update
+them together with `amarit update`, below.
+
+## Update a service you build locally
+
+A program that runs as amarit units on the machine it is built on needs no
+release host. Point `releases` at a directory and leave `release.url` out,
+so each asset is named relative to the manifest:
+
+```json
+{
+  "project": "app",
+  "releases": "/srv/app/releases/releases.json",
+  "release": { "targets": ["linux/amd64"], "asset": "app-{os}-{arch}-v{version}" }
+}
+```
+
+Build with the stamp and release into that directory:
+
+```sh
+go build -ldflags "$(amarit stamp -version 1.4.0)" -o /srv/app/releases/app-linux-amd64-v1.4.0 ./cmd/app
+amarit release -version 1.4.0 -dist /srv/app/releases -out /srv/app/releases/releases.json
+```
+
+Then bring the running units onto it:
+
+```sh
+amarit update -check              # what every unit built with amarit would do
+amarit update                     # all of them
+amarit update 'web-*' -rolling    # some of them, one instance at a time
+```
+
+`amarit update` runs each program's own `<binary> update` once per binary,
+however many units share it, with the unit's working directory and
+environment; then it restarts the units whose binary changed and leaves the
+rest alone, so it is safe to run after every build. If a restart fails (an
+instance exits, a rolling restart stops), it puts the previous binary back
+from `<bin>.amarit/prev`, restarts the units, keeps the rejected binary as
+`<bin>.amarit/bad`, and says so. A unit named outright whose program was not
+built with amarit is an error; with no names such units are skipped and
+listed.
 
 ## How an update runs
 

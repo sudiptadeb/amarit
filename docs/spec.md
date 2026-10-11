@@ -12,10 +12,15 @@ A client that sees a `spec` value it does not know must refuse the manifest.
 | `<asset>.sig` | signed tier | detached signature of each asset by the author's key; may instead be inlined as `sig` |
 | `amarit-key.json` | rotation | a successor key, signed by the current key |
 
-All files are plain UTF-8 JSON or base64 text, fetched over HTTPS. A publisher
-on GitHub attaches them to a release so
-`https://github.com/<owner>/<repo>/releases/latest/download/releases.json` is a
-stable URL. Any HTTPS host works; nothing in the spec depends on GitHub.
+All files are plain UTF-8 JSON or base64 text. The manifest URL is `https`,
+`http`, or `file` (a plain path is taken as a `file` URL), and the assets are
+fetched the same way; a build that publishes to a directory on the machine
+that runs the program needs no server. A publisher on GitHub attaches the
+files to a release so
+`https://github.com/<owner>/<repo>/releases/latest/download/releases.json` is
+a stable URL. Any host works; nothing in the spec depends on GitHub. Only
+`https` protects the transport; `http` and `file` rely on the hashes alone,
+so they belong on the same machine or a trusted network.
 
 ## 2. Manifest
 
@@ -54,7 +59,7 @@ stable URL. Any HTTPS host works; nothing in the spec depends on GitHub.
 | `releases.*.rollout` | integer 0–100 | no, default 100 | percentage of installs that take this release, keyed on the install ID (section 5) |
 | `releases.*.critical` | boolean | no, default false | apply at the next check regardless of the interval; the program's `Drain` is still honoured |
 | `releases.*.assets` | object | yes | target → asset |
-| `assets.*.url` | URL | yes | where the asset is downloaded from |
+| `assets.*.url` | URL | yes | where the asset is downloaded from; absolute, or relative to the manifest's own URL (`app-linux-amd64-v1.2.0` is the file beside `releases.json`) |
 | `assets.*.sha256` | hex | yes | digest of the asset bytes |
 | `assets.*.size` | integer | yes | byte length; checked during streaming so an oversized response is cut off |
 | `assets.*.sig` | base64 | signed tier | minisign-format ed25519 signature of the asset by the author's key |
@@ -127,6 +132,8 @@ One sidecar directory beside the binary, `<bin>.amarit/`:
 | `id` | the install id, section 5 |
 | `state.json` | the attempted version, the version running before it, starts since the attempt, and the last version that reported healthy. If the process finds itself still on the old version with an attempt recorded, it holds and logs instead of looping; three starts without a healthy mark trigger rollback |
 | `prev` | the previous binary, kept for rollback |
+| `bad` | a binary that was rolled back from, kept for inspection |
+| `lock` | held for the whole swap, so processes sharing the binary update it once |
 
 ## 8. Project configuration: `amarit.json`
 
@@ -154,12 +161,13 @@ manifest and stamped into the binary so the program hardcodes nothing:
 
 | Field | Meaning |
 |---|---|
-| `project`, `releases` | required; the manifest's `project` must match |
+| `project`, `releases` | required; the manifest's `project` must match. `releases` is an `https`, `http` or `file` URL, or a path; a relative path is taken from the program's working directory |
 | `key` | the author's minisign public key; present means the signed tier |
 | `restart` | `in-place` (default) or `overlap` for zero-downtime handover |
 | `interval` | how often `--auto-update` checks, a Go duration (default `1h`); `amarit.Interval()` in code, `AMARIT_UPDATE_INTERVAL` and `--update-interval` override it in that order. Exact-match versioning (section 3) is `amarit.ExactVersions()` in code |
 | `service.*` | how `service install` runs the program: instance count, environment file, arguments, restart policy, exit codes that must not restart, readiness probe |
 | `release.targets` | the `os/arch` list the release tool builds and lists in the manifest |
+| `release.asset`, `release.url` | the asset file name and its download URL, as patterns with `{version}`, `{os}`, `{arch}` and (in `url`) `{asset}`. `url` is optional; its default `{asset}` names the file beside the manifest |
 
 The stamp is two linker variables on the `amarit` package:
 `stampedProject` (base64 of the file) and `stampedVersion`. A build without them

@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.5.0
+
+Update a service from the machine it is built on: a local release
+directory, one command that brings every unit onto it, rollback when the
+restart fails.
+
+- **`amarit update [-check] [-rolling] [unit|glob ...]`.** Runs each
+  program's own `<binary> update` once per binary, however many units share
+  it, then restarts the units whose binary changed; `-rolling` one instance
+  at a time. No names means every unit whose program was built with amarit;
+  `-check` only reports. If the restart fails, the previous binary is put
+  back, the units are restarted, and the rejected binary is kept as
+  `<bin>.amarit/bad`.
+- **Local manifests.** `releases` in `amarit.json` (and `--update-url`) may
+  be `file://…` or a plain path; an asset's `url` may be relative to the
+  manifest, so `releases.json` can sit in a directory beside its assets.
+  `release.url` is optional and defaults to the asset beside the manifest.
+- **`<program> update --check`** says what is available and applies nothing.
+- **One update at a time per binary.** Processes that share a binary (the
+  instances of a unit) take turns on a lock in the sidecar; the later ones
+  find the version in place and only restart into it. Before, the race could
+  overwrite the previous binary kept for rollback.
+- Fixed: `amarit stamp` printed the wrong linker variable, so a stamped
+  build carried no configuration. Fixed: `-config` defaulted to
+  `amarit.config`, and `release -out` to `amarit.json`, which would have
+  overwritten the project file; they are `amarit.json` and `releases.json`.
+
 ## v0.4.0
 
 The daemon grows up to a real service stack: a web server, identical workers,
