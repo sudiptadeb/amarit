@@ -47,7 +47,7 @@ func main() {
 	case "stop":
 		err = named(os.Args[2:], func(n string) error { return amarit.DefaultBase().Enable(n, false) })
 	case "start":
-		err = named(os.Args[2:], func(n string) error { return amarit.DefaultBase().Enable(n, true) })
+		err = start(os.Args[2:])
 	case "restart":
 		err = restart(os.Args[2:])
 	case "rm":
@@ -91,12 +91,14 @@ func usage() {
 keep it alive (this machine):
   amarit install [--system]        keep the amarit daemon itself running; --system needs sudo once,
                                    after which 'amarit run' never does
-  amarit run [-name N] [-instances N] <binary> [args...]
+  amarit run [-name N] [-instances N] [-force] <binary> [args...]
                                    keep a program running (unit named after the binary);
-                                   -instances N runs N copies named <name>@1..N
+                                   -instances N runs N copies named <name>@1..N; refuses a
+                                   program launchd or systemd already runs unless -force
   amarit ls                        every unit, its state, pid, restarts
   amarit logs [-f] <unit>[@<i>]    a unit's output, or one instance's
-  amarit stop|start <unit>[@<i>]   stop or start a unit, or one instance of it
+  amarit stop <unit>[@<i>]         stop a unit, or one instance of it
+  amarit start [-force] <unit>[@<i>]
   amarit restart <unit|glob>... [-rolling]
                                    restart units now (web-*, worker@*); -rolling does one
                                    at a time and waits for each to stay up before the next

@@ -11,6 +11,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -304,8 +305,9 @@ func run(args []string) error {
 	dir := fs.String("dir", "", "working directory")
 	envFile := fs.String("env-file", "", "file of KEY=VALUE lines sourced at start")
 	instances := fs.Int("instances", 0, "run N copies, named <name>@1..N")
+	force := fs.Bool("force", false, "add the program even if another supervisor already runs it")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: amarit run [-name N] [-instances N] [-restart always|on-failure|never] [-dir D] [-env-file F] <binary> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: amarit run [-name N] [-instances N] [-restart always|on-failure|never] [-dir D] [-env-file F] [-force] <binary> [args...]")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -327,6 +329,9 @@ func run(args []string) error {
 		if len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
 			*name += "-" + strings.TrimLeft(rest[0], "-")
 		}
+	}
+	if err := guard(bin, *force); err != nil {
+		return err
 	}
 	base := amarit.DefaultBase()
 	u := amarit.Unit{Name: *name, Binary: bin, Args: rest, Restart: *restart, Dir: *dir, EnvFile: *envFile, Instances: *instances}
@@ -407,24 +412,48 @@ func ls(args []string) error {
 	return w.Flush()
 }
 
-// instanceNames expands a unit name to its instances; <name>@<i> stays as
-// it is. It errors when nothing is called that.
-func instanceNames(base amarit.Base, name string) ([]string, error) {
+// unitFor finds the unit a name or <name>@<i> belongs to.
+func unitFor(base amarit.Base, name string) (amarit.Unit, error) {
 	units, err := base.Units()
+	if err != nil {
+		return amarit.Unit{}, err
+	}
+	for _, u := range units {
+		if u.Name == name || slices.Contains(u.InstanceNames(), name) {
+			return u, nil
+		}
+	}
+	return amarit.Unit{}, fmt.Errorf("no unit named %s", name)
+}
+
+// instanceNames expands a unit name to its instances; <name>@<i> stays as
+// it is.
+func instanceNames(base amarit.Base, name string) ([]string, error) {
+	u, err := unitFor(base, name)
 	if err != nil {
 		return nil, err
 	}
-	for _, u := range units {
-		if u.Name == name {
-			return u.InstanceNames(), nil
-		}
-		for _, n := range u.InstanceNames() {
-			if n == name {
-				return []string{name}, nil
-			}
-		}
+	if u.Name == name {
+		return u.InstanceNames(), nil
 	}
-	return nil, fmt.Errorf("no unit named %s", name)
+	return []string{name}, nil
+}
+
+// start re-enables a unit or instance, with the same guard as run.
+func start(args []string) error {
+	args, force := takeFlag(args, "force")
+	if len(args) != 1 {
+		return errors.New("usage: amarit start [-force] <unit>[@<i>]")
+	}
+	base := amarit.DefaultBase()
+	u, err := unitFor(base, args[0])
+	if err != nil {
+		return err
+	}
+	if err := guard(u.Binary, force); err != nil {
+		return err
+	}
+	return base.Enable(args[0], true)
 }
 
 func logs(args []string) error {
