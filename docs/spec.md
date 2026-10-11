@@ -130,7 +130,7 @@ One sidecar directory beside the binary, `<bin>.amarit/`:
 | File | Purpose |
 |---|---|
 | `id` | the install id, section 5 |
-| `state.json` | the attempted version, the version running before it, starts since the attempt, and the last version that reported healthy. If the process finds itself still on the old version with an attempt recorded, it holds and logs instead of looping; three starts without a healthy mark trigger rollback |
+| `state.json` | the attempted version, the version running before it, starts since the attempt, the last version that reported healthy, and the version the last rollback rejected. If the process finds itself still on the old version with an attempt recorded, it holds and logs instead of looping; three starts without a healthy mark trigger rollback; the rejected version is not taken again from any channel, only a different one is |
 | `prev` | the previous binary, kept for rollback |
 | `bad` | a binary that was rolled back from, kept for inspection |
 | `lock` | held for the whole swap, so processes sharing the binary update it once |

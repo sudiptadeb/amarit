@@ -111,8 +111,23 @@ removes it: two supervisors for one program restart it in a loop. `-force`
 overrides when you mean it.
 
 Stopping the daemon never stops its units, and a new daemon adopts them.
-The daemon never touches a binary: updates are the program's own business,
-below.
+The daemon never touches a unit's binary: updates are the program's own
+business, below.
+
+The daemon does keep *itself* current, using the library like any other
+program: amarit's own `amarit.json` declares auto-update its default, so a
+release build checks
+[amarit's releases](https://github.com/sudiptadeb/amarit/releases) hourly,
+verifies, swaps the binary and restarts in place. The pid does not change,
+launchd or systemd notice nothing, and the units stay its children and are
+adopted with their pids; a version that cannot come up three times is
+rolled back. The log says so: `amarit v0.5.0: daemon 4745 supervising
+...` and `auto-update on: amarit 0.5.0, channel stable, every 1h0m0s`.
+`AMARIT_AUTO_UPDATE=0` in the job's environment, or `amarit daemon
+--no-auto-update`, turns it off. Only the daemon checks; `amarit ls` and
+the other short commands run whatever is installed. A `go install` build
+has no stamp and never updates itself; the prebuilt binaries do, and a
+later `go install` over one of them puts an inert build back.
 
 ## Keep it current
 

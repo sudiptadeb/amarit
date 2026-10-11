@@ -92,7 +92,9 @@ directory on the machine that runs the program works too.
 8. Exec in place with the same argv and environment. Registered descriptors
    have close-on-exec cleared and their numbers passed in the environment.
 9. The new process writes `healthy` when its readiness check passes. Three
-   starts without it swap `.prev` back.
+   starts without it swap `.prev` back and record the version as rejected,
+   so the next check does not take it again; the publisher's next release
+   is taken as usual.
 
 ### Restart strategies
 
@@ -244,6 +246,26 @@ releases it. The lock keeps the default safe; it does not make N
 restarts within the hour, each on its own jitter, a good shape for a
 service stack. There, `AMARIT_AUTO_UPDATE=0` in the unit and
 `amarit update -rolling` after the build is the recommendation.
+
+### The daemon updates itself
+
+The daemon is a long-running program like any it supervises, so it uses the
+library: amarit's own `amarit.json` declares `auto_update` and the release
+build stamps it in. The restart is the in-place exec, which is what makes it
+safe under the one supervisor the daemon has: launchd on the headless Mac
+cannot follow a pid change, and the exec keeps the pid. It also keeps the
+units' parentage, which surfaced one bug: the adopted-process watcher polled
+`kill(pid, 0)`, which a zombie answers, so a unit that exited after the
+daemon's exec would have looked alive forever. The watcher now reaps with
+`wait4(WNOHANG)` first and polls only for processes that are not its
+children (a daemon restarted by launchd). Readiness is the preflight (the
+base is usable and the units parse); a daemon that fails it exits, the
+supervisor restarts it, and the library's three-start rollback does the
+rest. The engine's drain waits for the current reconcile pass so the exec
+never lands in the middle of a stop. Only `amarit daemon` runs the engine;
+the short commands have nothing to keep current and no business marking a
+binary healthy. The first installed daemon predates all this and is
+replaced by hand once; after that the channel carries it.
 
 ### Log rotation while running
 
