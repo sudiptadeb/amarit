@@ -22,15 +22,26 @@ import (
 
 const label = "com.amarit.daemon"
 
-// daemon is what the service manager (or a detached start) runs.
+// daemon is what the service manager (or a detached start) runs. It is the
+// one amarit command that keeps itself current: a release build carries
+// amarit.json with auto_update on, so the daemon checks amarit's own
+// releases and execs the new version in place. The pid stays, launchd or
+// systemd notice nothing, and the units stay its children and are adopted
+// (the short-lived commands never check; they run whatever is installed).
+// --no-auto-update or AMARIT_AUTO_UPDATE=0 in the job's environment turns
+// it off; a plain `go install` build has no stamp and never checks.
 func daemon(args []string) error {
+	base := amarit.DefaultBase()
+	d := amarit.NewDaemon(base)
+	d.Version = buildVersion()
+	amarit.Start(amarit.Healthy(d.Preflight), amarit.Drain(d.Drain))
 	fs := flag.NewFlagSet("daemon", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(os.Args[2:]); err != nil { // Start stripped its own flags
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return amarit.NewDaemon(amarit.DefaultBase()).Run(ctx)
+	return d.Run(ctx)
 }
 
 // install keeps the daemon itself running the strongest way the machine

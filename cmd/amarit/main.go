@@ -94,6 +94,8 @@ func usage() {
 keep it alive (this machine):
   amarit install [--system]        keep the amarit daemon itself running; --system needs sudo once,
                                    after which 'amarit run' never does
+  amarit daemon [--no-auto-update] what the job runs; a release build keeps itself current
+                                   unless told not to (or AMARIT_AUTO_UPDATE=0 in its environment)
   amarit run [-name N] [-instances N] [-force] <binary> [args...]
                                    keep a program running (unit named after the binary);
                                    -instances N runs N copies named <name>@1..N; refuses a
