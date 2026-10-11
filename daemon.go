@@ -227,6 +227,29 @@ func (b Base) Enable(name string, on bool) error {
 
 func (b Base) stopMarker(name string) string { return filepath.Join(b.run(), name+".stopped") }
 
+// RequestRestart asks the daemon to restart one instance now. A deliberate
+// restart resets the backoff and does not count as a failure.
+func (b Base) RequestRestart(name string) error {
+	if err := b.ensure(); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(b.run(), name+".restart"), nil, 0o644)
+}
+
+// takeRestartRequests returns the names restarts were asked for, and
+// clears the requests.
+func (b Base) takeRestartRequests() []string {
+	entries, _ := os.ReadDir(b.run())
+	var names []string
+	for _, e := range entries {
+		if name, ok := strings.CutSuffix(e.Name(), ".restart"); ok {
+			names = append(names, name)
+			_ = os.Remove(filepath.Join(b.run(), e.Name()))
+		}
+	}
+	return names
+}
+
 // Stopped reports whether one instance was stopped by name.
 func (b Base) Stopped(name string) bool {
 	_, err := os.Stat(b.stopMarker(name))
@@ -448,6 +471,21 @@ func (d *Daemon) reconcile() {
 	}
 	sort.Slice(gone, func(i, j int) bool { return instanceLess(gone[j].unit.Name, gone[i].unit.Name) })
 	d.stopAll(gone)
+	// Restarts asked for with `amarit restart`: together, then fresh starts.
+	var again []*child
+	for _, name := range d.base.takeRestartRequests() {
+		if c, ok := d.children[name]; ok && want[name].Name != "" {
+			again = append(again, c)
+		}
+	}
+	sort.Slice(again, func(i, j int) bool { return instanceLess(again[i].unit.Name, again[j].unit.Name) })
+	d.stopAll(again)
+	for _, c := range again {
+		c.unit = want[c.unit.Name]
+		c.backoff, c.next, c.lastExit, c.parked = time.Second, time.Time{}, "", false
+		log.Printf("amarit: %s: restart requested", c.unit.Name)
+		d.start(c)
+	}
 	// Start, restart, or notice exits.
 	for name, u := range want {
 		c, ok := d.children[name]

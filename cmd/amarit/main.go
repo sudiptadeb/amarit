@@ -48,6 +48,8 @@ func main() {
 		err = named(os.Args[2:], func(n string) error { return amarit.DefaultBase().Enable(n, false) })
 	case "start":
 		err = named(os.Args[2:], func(n string) error { return amarit.DefaultBase().Enable(n, true) })
+	case "restart":
+		err = restart(os.Args[2:])
 	case "rm":
 		err = named(os.Args[2:], amarit.DefaultBase().RemoveUnit)
 	case "logs":
@@ -95,6 +97,9 @@ keep it alive (this machine):
   amarit ls                        every unit, its state, pid, restarts
   amarit logs [-f] <unit>[@<i>]    a unit's output, or one instance's
   amarit stop|start <unit>[@<i>]   stop or start a unit, or one instance of it
+  amarit restart <unit|glob>... [-rolling]
+                                   restart units now (web-*, worker@*); -rolling does one
+                                   at a time and waits for each to stay up before the next
   amarit rm <unit>
   amarit uninstall
 

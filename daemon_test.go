@@ -270,3 +270,38 @@ func TestInstancesRunNamedCopies(t *testing.T) {
 		t.Fatal("an instance that does not exist must be refused")
 	}
 }
+
+func TestRequestedRestartIsNotAFailure(t *testing.T) {
+	dir := t.TempDir()
+	base := Base(filepath.Join(dir, "base"))
+	sleeper := script(t, dir, "sleeper", `exec sleep 60`)
+	if err := base.SaveUnit(Unit{Name: "sleeper", Binary: sleeper}); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDaemon(base)
+	d.tick = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+	var pid int
+	waitFor(t, "sleeper to run", func() bool {
+		s, _ := base.Statuses()
+		pid = s["sleeper"].PID
+		return pid != 0
+	})
+	d.children["sleeper"].backoff = time.Minute // as if it had been failing
+	if err := base.RequestRestart("sleeper"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "sleeper to run with a new pid", func() bool {
+		s, _ := base.Statuses()
+		return s["sleeper"].State == "running" && s["sleeper"].PID != 0 && s["sleeper"].PID != pid
+	})
+	s, _ := base.Statuses()
+	if s["sleeper"].Restarts != 0 || s["sleeper"].LastExit != "" || d.children["sleeper"].backoff != time.Second {
+		t.Fatalf("after a requested restart: %+v, backoff %s", s["sleeper"], d.children["sleeper"].backoff)
+	}
+	if processAlive(pid) {
+		t.Fatal("the old process must be gone")
+	}
+}
