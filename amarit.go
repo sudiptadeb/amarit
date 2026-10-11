@@ -37,6 +37,7 @@ type Config struct {
 	Interval time.Duration // auto-update check cadence; zero means one hour
 
 	Handoff func() []*os.File         // descriptors to carry across the restart
+	Values  func() map[string]string  // small named values to carry across the restart
 	Drain   func(ctx context.Context) // called before the restart, with a deadline
 	Healthy func() bool               // gates rollback; nil means healthy on start
 }
@@ -83,6 +84,11 @@ func Interval(d time.Duration) Option { return func(c *Config) { c.Interval = d 
 
 // Handoff registers the descriptors the new process must inherit.
 func Handoff(fn func() []*os.File) Option { return func(c *Config) { c.Handoff = fn } }
+
+// HandoffValues registers small named values the new process must know
+// (a child's pid, a port, a token) alongside the descriptors. The new
+// process reads them once with InheritedValues.
+func HandoffValues(fn func() map[string]string) Option { return func(c *Config) { c.Values = fn } }
 
 // Drain registers the shutdown the engine runs before a restart.
 func Drain(fn func(ctx context.Context)) Option { return func(c *Config) { c.Drain = fn } }

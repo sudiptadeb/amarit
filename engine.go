@@ -248,6 +248,11 @@ func (u *Updater) Apply(ctx context.Context, d *Decision) error {
 			log.Printf("amarit: handing %d descriptors to the new process", len(files))
 		}
 	}
+	if u.cfg.Values != nil {
+		if entry := prepareValues(u.cfg.Values()); entry != "" {
+			env = append(env, entry)
+		}
+	}
 	log.Printf("amarit: %s %s -> %s, restarting", u.cfg.Project, st.From, d.Version)
 	return u.execFn(u.exe, u.argv, env)
 }
