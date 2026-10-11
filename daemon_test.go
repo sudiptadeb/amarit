@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -148,6 +149,31 @@ func TestUnitValidationAndEnvFile(t *testing.T) {
 	got, err := readEnvFile(envFile)
 	if err != nil || strings.Join(got, ",") != "A=1,B=two words,C=3" {
 		t.Fatalf("env file parsed as %v (%v)", got, err)
+	}
+}
+
+// Regression: a hand-written web@3.json was loaded as a unit and then read
+// as instance 3 of web, colliding with web's own copies.
+func TestUnitFileWithInstanceNameIsIgnoredLoudly(t *testing.T) {
+	base := Base(t.TempDir())
+	if err := base.SaveUnit(Unit{Name: "web", Binary: "/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(base.units(), "web@3.json"), []byte(`{"binary": "/bin/true"}`), 0o644)
+	var out bytes.Buffer
+	log.SetOutput(&out)
+	defer log.SetOutput(os.Stderr)
+	units, err := base.Units()
+	if err != nil || len(units) != 1 || units[0].Name != "web" {
+		t.Fatalf("units = %v (%v), want only web", units, err)
+	}
+	if !strings.Contains(out.String(), "IGNORING unit file") || !strings.Contains(out.String(), "web@3.json") {
+		t.Fatalf("no warning logged: %q", out.String())
+	}
+	out.Reset()
+	base.Units()
+	if out.Len() != 0 {
+		t.Fatalf("warned again on the next poll: %q", out.String())
 	}
 }
 

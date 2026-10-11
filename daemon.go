@@ -145,13 +145,26 @@ func (b Base) ensure() error {
 	return nil
 }
 
+// checkName refuses names that would be read as a path or as an instance
+// (web@2), which would collide with another unit's copies.
+func checkName(name string) error {
+	if strings.ContainsAny(name, "/\\ @") {
+		return fmt.Errorf("unit name %q: no slashes, spaces or @ (@ marks an instance, as in web@2)", name)
+	}
+	return nil
+}
+
+// reportedBadUnits holds the unit files already reported, so a bad file is
+// announced once per process instead of on every poll.
+var reportedBadUnits sync.Map
+
 // SaveUnit writes a unit file; the daemon picks it up within a few seconds.
 func (b Base) SaveUnit(u Unit) error {
 	if u.Name == "" || u.Binary == "" {
 		return errors.New("unit needs a name and a binary")
 	}
-	if strings.ContainsAny(u.Name, "/\\ @") {
-		return fmt.Errorf("unit name %q: no slashes, spaces or @", u.Name)
+	if err := checkName(u.Name); err != nil {
+		return err
 	}
 	if u.Instances < 0 {
 		return fmt.Errorf("unit %s: instances must not be negative", u.Name)
@@ -283,6 +296,14 @@ func (b Base) Units() ([]Unit, error) {
 		}
 		if u.Name == "" {
 			u.Name = strings.TrimSuffix(e.Name(), ".json")
+		}
+		// SaveUnit refuses these names; a hand-written file must not slip past.
+		if err := checkName(u.Name); err != nil {
+			path := filepath.Join(b.units(), e.Name())
+			if _, seen := reportedBadUnits.LoadOrStore(path, true); !seen {
+				log.Printf("amarit: WARNING: IGNORING unit file %s, it will not run: %v. Rename the file and its \"name\" field.", path, err)
+			}
+			continue
 		}
 		units = append(units, u)
 	}
