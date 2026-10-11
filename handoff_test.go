@@ -18,6 +18,11 @@ func cloexec(t *testing.T, fd int) bool {
 	return flags&syscall.FD_CLOEXEC != 0
 }
 
+// Both sides of the handoff live in this one process, so each pipe end gets
+// a second *os.File; collected, its finalizer would close a descriptor
+// number that another test owns by then. Keep them reachable.
+var handoffWrappers []*os.File
+
 func TestHandoffRoundTrip(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -29,8 +34,9 @@ func TestHandoffRoundTrip(t *testing.T) {
 		t.Fatal("Go opens pipes close-on-exec; the test premise is wrong")
 	}
 
-	named := os.NewFile(r.Fd(), "pty:abc:123")
-	entry, err := prepareHandoff([]*os.File{named, os.NewFile(w.Fd(), "listener")})
+	named, listener := os.NewFile(r.Fd(), "pty:abc:123"), os.NewFile(w.Fd(), "listener")
+	handoffWrappers = append(handoffWrappers, named, listener)
+	entry, err := prepareHandoff([]*os.File{named, listener})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +49,7 @@ func TestHandoffRoundTrip(t *testing.T) {
 
 	t.Setenv(handoffEnv, strings.TrimPrefix(entry, handoffEnv+"="))
 	files := Inherited()
+	handoffWrappers = append(handoffWrappers, files...)
 	if len(files) != 2 || files[0].Name() != "pty:abc:123" || files[1].Name() != "listener" {
 		t.Fatalf("inherited %v", files)
 	}
