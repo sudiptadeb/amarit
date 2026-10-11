@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"maps"
 	"os"
@@ -517,6 +518,9 @@ func (d *Daemon) reconcile() {
 		}
 	}
 	for name, c := range d.children {
+		if c.pid != 0 {
+			rotateLog(filepath.Join(d.base.logs(), name+".log"))
+		}
 		d.writeStatus(name, c)
 	}
 }
@@ -717,9 +721,32 @@ func readEnvFile(path string) ([]string, error) {
 	return out, sc.Err()
 }
 
-// rotateLog keeps one previous log once the current one passes 10 MB.
+// maxLogSize is where a unit's log is rotated, keeping one previous file.
+const maxLogSize = 10 << 20
+
+// rotateLog copies a log that has passed maxLogSize to <log>.1 and empties
+// it in place. The program keeps its descriptor, opened with O_APPEND, so
+// its next line lands at the start of the emptied file; a line written
+// during the copy can be lost, which is the price of not restarting it.
 func rotateLog(path string) {
-	if st, err := os.Stat(path); err == nil && st.Size() > 10<<20 {
-		_ = os.Rename(path, path+".1")
+	st, err := os.Stat(path)
+	if err != nil || st.Size() <= maxLogSize {
+		return
+	}
+	src, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer src.Close()
+	dst, err := os.Create(path + ".1")
+	if err != nil {
+		return
+	}
+	_, err = io.Copy(dst, src)
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		_ = os.Truncate(path, 0)
 	}
 }

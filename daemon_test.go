@@ -1,6 +1,7 @@
 package amarit
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -304,4 +305,32 @@ func TestRequestedRestartIsNotAFailure(t *testing.T) {
 	if processAlive(pid) {
 		t.Fatal("the old process must be gone")
 	}
+}
+
+func TestLogRotatesWhileRunning(t *testing.T) {
+	dir := t.TempDir()
+	base := Base(filepath.Join(dir, "base"))
+	chatty := script(t, dir, "chatty", `while :; do echo tick; sleep 0.1; done`)
+	if err := base.SaveUnit(Unit{Name: "chatty", Binary: chatty}); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDaemon(base)
+	d.tick = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+	logPath := filepath.Join(base.logs(), "chatty.log")
+	waitFor(t, "chatty to write", func() bool {
+		b, _ := os.ReadFile(logPath)
+		return strings.Contains(string(b), "tick")
+	})
+	// Fill the live log past the limit behind the program's back.
+	if err := os.WriteFile(logPath, bytes.Repeat([]byte("x"), maxLogSize+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the log to be rotated and written to again", func() bool {
+		prev, err := os.Stat(logPath + ".1")
+		b, _ := os.ReadFile(logPath)
+		return err == nil && prev.Size() > maxLogSize && len(b) < 4096 && strings.HasPrefix(string(b), "tick")
+	})
 }
