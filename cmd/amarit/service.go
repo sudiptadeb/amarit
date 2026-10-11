@@ -254,7 +254,7 @@ func startDetached(self string, base amarit.Base) error {
 	cmd := exec.Command(self, "daemon")
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.Env = append(os.Environ(), "AMARIT_HOME="+string(base))
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.SysProcAttr = detachAttr()
 	if err := cmd.Start(); err != nil {
 		return err
 	}

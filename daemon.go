@@ -10,9 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -28,6 +30,20 @@ type Unit struct {
 	Restart       string            `json:"restart,omitempty"` // always (default), on-failure, never
 	NoRestartExit []int             `json:"no_restart_exit,omitempty"`
 	Enabled       *bool             `json:"enabled,omitempty"` // nil means true
+	// StopTimeout is how long a stop waits after SIGTERM before SIGKILL, a
+	// duration like "60s"; default 10s. Signals go to the whole process group.
+	StopTimeout string `json:"stop_timeout,omitempty"`
+}
+
+const defaultStopTimeout = 10 * time.Second
+
+// StopGrace is how long the daemon waits for the unit's process group to
+// leave after SIGTERM before it kills what is left.
+func (u Unit) StopGrace() time.Duration {
+	if d, err := time.ParseDuration(u.StopTimeout); err == nil && d > 0 {
+		return d
+	}
+	return defaultStopTimeout
 }
 
 // Status is what the daemon writes for each unit: <base>/run/<name>.json.
@@ -74,6 +90,11 @@ func (b Base) SaveUnit(u Unit) error {
 	}
 	if strings.ContainsAny(u.Name, "/\\ ") {
 		return fmt.Errorf("unit name %q: no slashes or spaces", u.Name)
+	}
+	if u.StopTimeout != "" {
+		if d, err := time.ParseDuration(u.StopTimeout); err != nil || d <= 0 {
+			return fmt.Errorf("unit %s: stop_timeout %q must be a duration like 30s", u.Name, u.StopTimeout)
+		}
 	}
 	if err := b.ensure(); err != nil {
 		return err
@@ -203,6 +224,7 @@ type child struct {
 	lastExit string
 	done     chan error
 	log      *os.File
+	parked   bool // exited and its policy says not to restart; waits for the unit file to change
 }
 
 // Daemon keeps every unit in its base running. One per base.
@@ -279,11 +301,15 @@ func (d *Daemon) reconcile() {
 		}
 	}
 	// Stop what is no longer wanted.
+	var gone []*child
 	for name, c := range d.children {
 		if _, ok := want[name]; !ok {
-			d.stop(name, c)
+			gone = append(gone, c)
+			delete(d.children, name)
+			_ = os.Remove(filepath.Join(d.base.run(), name+".json"))
 		}
 	}
+	d.stopAll(gone)
 	// Start, restart, or notice exits.
 	for name, u := range want {
 		c, ok := d.children[name]
@@ -292,6 +318,13 @@ func (d *Daemon) reconcile() {
 			d.children[name] = c
 			d.start(c)
 			continue
+		}
+		if c.parked {
+			// A changed unit file is the operator's word to try again.
+			if reflect.DeepEqual(c.unit, u) {
+				continue
+			}
+			c.parked = false
 		}
 		c.unit = u
 		if c.pid == 0 {
@@ -367,10 +400,12 @@ func (d *Daemon) exited(c *child, err error) {
 		c.lastExit = "exit 0"
 	}
 	uptime := time.Since(c.started)
+	pid := c.pid
 	c.pid, c.cmd = 0, nil
+	// Whatever the program left behind still holds its memory and ports.
+	reapGroup(c.unit.Name, pid, c.unit.StopGrace())
 	if !c.unit.wantsRestart(code, err) {
-		c.next = time.Time{}
-		c.unit.Enabled = new(bool) // parked until the unit file changes
+		c.parked = true
 		log.Printf("amarit: %s: %s; not restarting (policy)", c.unit.Name, c.lastExit)
 		return
 	}
@@ -383,24 +418,75 @@ func (d *Daemon) exited(c *child, err error) {
 	c.backoff = min(c.backoff*2, time.Minute)
 }
 
-func (d *Daemon) stop(name string, c *child) {
-	if c.pid != 0 {
-		log.Printf("amarit: %s: stopping pid %d", name, c.pid)
-		if p, err := os.FindProcess(c.pid); err == nil {
-			_ = p.Signal(syscall.SIGTERM)
-			select {
-			case <-c.done:
-			case <-time.After(10 * time.Second):
-				_ = p.Kill()
-				<-c.done
-			}
-		}
-		if c.log != nil {
-			c.log.Close()
-		}
+// stopAll stops children together: every group is told to stop first, in
+// the order given, then each is waited for, so eight workers with a 60 s
+// grace take 60 s, not eight minutes.
+func (d *Daemon) stopAll(cs []*child) {
+	for _, c := range cs {
+		d.terminate(c)
 	}
-	delete(d.children, name)
-	_ = os.Remove(filepath.Join(d.base.run(), name+".json"))
+	var wg sync.WaitGroup
+	for _, c := range cs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d.awaitExit(c)
+		}()
+	}
+	wg.Wait()
+}
+
+// terminate asks a child's whole process group to stop. The child was
+// started with its own session, so its pid is the group id, and programs
+// that spawn their own children take them along.
+func (d *Daemon) terminate(c *child) {
+	if c.pid == 0 {
+		return
+	}
+	log.Printf("amarit: %s: stopping pid %d", c.unit.Name, c.pid)
+	_ = signalGroup(c.pid, syscall.SIGTERM)
+}
+
+// awaitExit waits for a terminated child's group to be gone, up to the
+// unit's stop timeout, then kills what is left.
+func (d *Daemon) awaitExit(c *child) {
+	if c.pid == 0 {
+		return
+	}
+	grace := c.unit.StopGrace()
+	deadline := time.Now().Add(grace)
+	for groupAlive(c.pid) && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if groupAlive(c.pid) {
+		log.Printf("amarit: %s: still running %s after SIGTERM; killing", c.unit.Name, grace)
+		_ = signalGroup(c.pid, syscall.SIGKILL)
+	}
+	<-c.done
+	if c.log != nil {
+		c.log.Close()
+		c.log = nil
+	}
+	c.pid, c.cmd = 0, nil
+}
+
+// reapGroup handles a program that exited and left children behind: they
+// get the same SIGTERM, grace and SIGKILL a stop gives the group.
+func reapGroup(name string, pid int, grace time.Duration) {
+	if !groupAlive(pid) {
+		return
+	}
+	log.Printf("amarit: %s: pid %d left processes behind; stopping them", name, pid)
+	_ = signalGroup(pid, syscall.SIGTERM)
+	go func() {
+		deadline := time.Now().Add(grace)
+		for groupAlive(pid) && time.Now().Before(deadline) {
+			time.Sleep(100 * time.Millisecond)
+		}
+		if groupAlive(pid) {
+			_ = signalGroup(pid, syscall.SIGKILL)
+		}
+	}()
 }
 
 func (d *Daemon) writeStatus(name string, c *child) {
@@ -408,7 +494,7 @@ func (d *Daemon) writeStatus(name string, c *child) {
 	switch {
 	case c.pid != 0:
 		s.State = "running"
-	case !c.unit.enabled():
+	case c.parked:
 		s.State = "exited"
 	default:
 		s.State = "backoff"

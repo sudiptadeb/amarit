@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -137,5 +138,64 @@ func TestUnitValidationAndEnvFile(t *testing.T) {
 	got, err := readEnvFile(envFile)
 	if err != nil || strings.Join(got, ",") != "A=1,B=two words,C=3" {
 		t.Fatalf("env file parsed as %v (%v)", got, err)
+	}
+}
+
+func TestStopKillsTheProcessGroupAfterTheGrace(t *testing.T) {
+	dir := t.TempDir()
+	base := Base(filepath.Join(dir, "base"))
+	childPID := filepath.Join(dir, "child.pid")
+	// Ignores SIGTERM and passes that on to its child, so only the kill of
+	// the whole group after the grace period can end either of them.
+	stubborn := script(t, dir, "stubborn", `trap '' TERM; sleep 300 & echo $! > `+childPID+`; wait`)
+	if err := base.SaveUnit(Unit{Name: "stubborn", Binary: stubborn, StopTimeout: "1s"}); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDaemon(base)
+	d.tick = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+
+	var pid, child int
+	waitFor(t, "stubborn and its child to run", func() bool {
+		s, _ := base.Statuses()
+		pid = s["stubborn"].PID
+		b, _ := os.ReadFile(childPID)
+		child, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		return pid != 0 && child != 0
+	})
+	t0 := time.Now()
+	if err := base.RemoveUnit("stubborn"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the shell and its child to be gone", func() bool { return !processAlive(pid) && !processAlive(child) })
+	if took := time.Since(t0); took > 6*time.Second {
+		t.Fatalf("stop took %s; stop_timeout 1s was not honoured", took)
+	}
+}
+
+func TestNeverPolicyRunsOnce(t *testing.T) {
+	// Regression: the parked unit was re-run on the next tick because the
+	// unit file's "enabled" overwrote the park.
+	dir := t.TempDir()
+	base := Base(filepath.Join(dir, "base"))
+	runs := filepath.Join(dir, "runs")
+	once := script(t, dir, "once", `echo run >> `+runs)
+	if err := base.SaveUnit(Unit{Name: "once", Binary: once, Restart: "never"}); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDaemon(base)
+	d.tick = 50 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+	waitFor(t, "once to exit", func() bool {
+		s, _ := base.Statuses()
+		return s["once"].State == "exited"
+	})
+	time.Sleep(500 * time.Millisecond)
+	if b, _ := os.ReadFile(runs); strings.Count(string(b), "run") != 1 {
+		t.Fatalf("a never unit ran %d times", strings.Count(string(b), "run"))
 	}
 }
