@@ -226,3 +226,30 @@ func TestReconcileHealthyThenRollback(t *testing.T) {
 		t.Fatal("a version that never took must hold auto-update")
 	}
 }
+
+// A build that publishes to a directory: the manifest is a plain path and
+// names its asset relative to itself.
+func TestApplyFromLocalDirectory(t *testing.T) {
+	dir := t.TempDir()
+	exe := fakeBinary(t, dir, "demo", "v0.5.0")
+	rel := filepath.Join(t.TempDir(), "release dir")
+	if err := os.MkdirAll(rel, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(rel, "demo-v0.6.0"), assetBody, 0o644)
+	os.WriteFile(filepath.Join(rel, "releases.json"), []byte(manifestFor("0.6.0", "0.5.0", "")("demo-v0.6.0")), 0o644)
+	u := testUpdater(t, nil, exe, "0.5.0")
+	u.cfg.Releases = filepath.Join(rel, "releases.json")
+	u.execFn = func(string, []string, []string) error { return nil }
+
+	d, err := u.Check(context.Background())
+	if err != nil || !d.Update {
+		t.Fatalf("check: %v %+v", err, d)
+	}
+	if err := u.Apply(context.Background(), d); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(exe); string(got) != string(assetBody) {
+		t.Fatal("the new binary is not in place")
+	}
+}

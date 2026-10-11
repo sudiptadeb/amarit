@@ -11,6 +11,7 @@ import (
 	"log"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -76,10 +77,56 @@ func newUpdater(cfg Config, opts Options, argv []string) (*Updater, error) {
 }
 
 func (u *Updater) manifestURL() string {
+	raw := u.cfg.Releases
 	if u.opts.ManifestURL != "" {
-		return u.opts.ManifestURL
+		raw = u.opts.ManifestURL
 	}
-	return u.cfg.Releases
+	// A plain path is a local manifest: a build that publishes to a
+	// directory on the same machine needs no web server.
+	if !strings.Contains(raw, "://") {
+		if abs, err := filepath.Abs(raw); err == nil {
+			return (&url.URL{Scheme: "file", Path: abs}).String()
+		}
+	}
+	return raw
+}
+
+// assetURL resolves an asset's url against the manifest's, so a manifest
+// can name its assets relative to itself ("app-linux-amd64-v1.2.0").
+func (u *Updater) assetURL(a Asset) (string, error) {
+	base, err := url.Parse(u.manifestURL())
+	if err != nil {
+		return "", err
+	}
+	ref, err := url.Parse(a.URL)
+	if err != nil {
+		return "", err
+	}
+	return base.ResolveReference(ref).String(), nil
+}
+
+// open fetches a URL: http(s) through the client, file:// from the disk.
+func (u *Updater) open(ctx context.Context, raw string) (io.ReadCloser, error) {
+	if path, ok := strings.CutPrefix(raw, "file://"); ok {
+		if p, err := url.PathUnescape(path); err == nil {
+			path = p
+		}
+		return os.Open(path)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "amarit/"+u.cfg.Project+"/"+u.cfg.Version)
+	resp, err := u.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("%s returned %s", raw, resp.Status)
+	}
+	return resp.Body, nil
 }
 
 // sidecar is the one directory amarit keeps beside the binary: state.json,
@@ -111,20 +158,12 @@ func (u *Updater) saveState(s state) error {
 
 // Check fetches the manifest and decides whether this process should update.
 func (u *Updater) Check(ctx context.Context) (*Decision, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.manifestURL(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "amarit/"+u.cfg.Project+"/"+u.cfg.Version)
-	resp, err := u.client.Do(req)
+	r, err := u.open(ctx, u.manifestURL())
 	if err != nil {
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("manifest: %s returned %s", u.manifestURL(), resp.Status)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	defer r.Close()
+	body, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("manifest: %w", err)
 	}
@@ -260,25 +299,22 @@ func (u *Updater) Apply(ctx context.Context, d *Decision) error {
 // download streams the asset into the executable's own directory, hashing
 // as it goes, so the later swap is a rename on the same filesystem.
 func (u *Updater) download(ctx context.Context, a Asset) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.URL, nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := u.client.Do(req)
+	src, err := u.assetURL(a)
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download: %s returned %s", a.URL, resp.Status)
+	body, err := u.open(ctx, src)
+	if err != nil {
+		return "", fmt.Errorf("download: %w", err)
 	}
+	defer body.Close()
 	f, err := os.CreateTemp(filepath.Dir(u.exe), filepath.Base(u.exe)+".new-*")
 	if err != nil {
 		return "", fmt.Errorf("download: %w", err)
 	}
 	tmp := f.Name()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, a.Size+1))
+	n, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(body, a.Size+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
