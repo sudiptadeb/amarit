@@ -327,6 +327,123 @@ next line lands at the start of the emptied file. A line written during the
 copy can be lost, which is the price of not asking programs to reopen their
 logs. The check is one `stat` per running unit per poll.
 
+## Root units (proposal, not built)
+
+Some jobs have to run as root: a one-shot `sysctl` at boot (raising the
+GPU wired-memory limit on a macOS model server), a listener on a port
+below 1024, tun and routing setup for a tunnel, and a service that should
+run under a dedicated low-privilege account, since switching user needs
+root. Today these stay in raw launchd or systemd beside amarit, and the
+double-supervision guard sees them there. The daemon itself never runs as
+root (README, "Who runs as whom"), and nothing here changes that.
+
+Three options were weighed.
+
+**(A) One daemon, as root, dropping to a per-unit `user`.** Rejected. It
+turns every machine's daemon into a root daemon, so the user-writable unit
+files in `~/.amarit` and the user-writable binary in `~/go/bin` become
+root's input: the hole issue #4 guards against, made the design. Self-update
+without sudo, the reason the binary is user-owned, is incompatible with a
+root daemon. And every statement in the README's trust section stops
+being true.
+
+**(C) Not supported; root jobs stay in launchd and systemd.** This is the
+honest answer today and costs little for the `sysctl` case: a LaunchDaemon
+with `RunAtLoad` or a systemd oneshot needs nothing from amarit. On Linux a
+port below 1024 is `AmbientCapabilities=CAP_NET_BIND_SERVICE` in a unit
+that runs as the user, no root at all. What is lost is one `ls`, one log
+format, `instances`, `env_file`, backoff, and `amarit update` for the
+service-account case, where the program is a real service.
+
+**(B) A second, separate system daemon.** Recommended. Same binary, its own
+root-owned base, its own service file, every command on it under sudo. The
+per-user daemon stays exactly as it is, and the boundary is one sentence:
+changing a root unit needs sudo. The rules that make it safe:
+
+1. *The binary.* The root daemon's executable must be at a root-owned path
+   that no other user can write, every parent directory included, checked
+   by `stat` at start and refused otherwise, with the reason in the log.
+   `~/go/bin/amarit` fails that check by design; the operator copies the
+   binary to `/usr/local/sbin` or `/Library/Application Support/amarit/bin`
+   first. Whether a path qualifies is decided by ownership and mode, not by
+   name: `/opt/homebrew/bin` is user-writable on many Macs.
+2. *The base.* macOS: `/Library/Application Support/amarit` with `units/`,
+   `run/`, `logs/`. Linux: `/etc/amarit/units`, `/var/lib/amarit/run`,
+   `/var/log/amarit`. Root-owned, 0700 and 0600 from the first version;
+   reading needs sudo too, which keeps the rule to one sentence. The daemon
+   refuses a unit file not owned by root or writable by group or others.
+3. *What a unit points at.* The daemon refuses a unit whose binary, any
+   parent directory of it, or `env_file` is owned by a non-root user or
+   writable by group or others, symlinks resolved and each component
+   checked. Otherwise a user swaps the binary and gets root at the next
+   restart. `/tmp` fails as world-writable; so does a build directory in a
+   home. A refused unit is parked with the reason in `ls` and the log.
+4. *`user` and `group`.* Optional fields honoured only by the root daemon:
+   the child does `initgroups`, `setgid`, `setuid` before exec
+   (`SysProcAttr.Credential` with the supplementary groups filled in), so
+   the program never runs as root, and a unit with `limits` runs
+   `amarit __exec` already as that account, raising its soft limit up to
+   the account's hard limit. Without `user` a root unit runs as root, which
+   is what `sysctl` and a port below 1024 need. The per-user daemon rejects
+   the field at `SaveUnit` and skips a unit file that carries it, with a
+   log line, so a file copied between the two tiers cannot run as the
+   wrong identity by silence.
+5. *One-shot boot jobs.* `restart: never` covers them, with one caveat.
+   The daemon runs the unit once, parks it as `exited`, and runs it again
+   when the unit file changes. The parked flag lives in memory, so every
+   daemon start runs the unit again: a reboot, a `systemctl restart`, and
+   the daemon's own in-place update. For an idempotent `sysctl` that is
+   "at boot, and a few more times", harmless. A job that must run exactly
+   once per boot would need a marker keyed to the boot id; no example asks
+   for it yet, so it is not proposed.
+6. *Updates.* Auto-update is off for the whole root tier until the signed
+   tier lands: the root daemon's service file passes `--no-auto-update`, and
+   the daemon gives root units `AMARIT_AUTO_UPDATE=0` instead of relying on
+   `AMARIT_MANAGED=1`. `sudo amarit update -root` applies releases on
+   request, with the same prev-and-rollback as today; the root daemon's own
+   binary is replaced the way it was installed, by copying it into place
+   and restarting the service. Reason: the hash tier is integrity, not
+   authenticity. The manifest and the asset come from the same host, so
+   whoever can publish there ships a binary and its matching hash
+   together; the Trivy release in March 2026 was exactly that. For the
+   per-user tier the blast radius is the user, who opted in; for root it is
+   the machine. A pinned signing key makes the publisher, not the host, the
+   authority, and per-unit opt-in can follow it.
+7. *CLI shape.* A `-root` flag on every unit command (`sudo amarit -root
+   run ...`, `-root ls`, `-root logs`), which requires euid 0 and selects
+   the fixed system base, never `AMARIT_HOME`. A command run under sudo
+   without the flag is refused with the two choices spelled out, instead of
+   what happens today, a detached root daemon over `/var/root/.amarit`.
+   The alternative, sudo alone selecting the root tier, reads well but
+   collides with `sudo amarit install --system`, which registers the
+   *per-user* daemon and is the one command every README reader runs; it
+   would also make `sudo amarit ls` typed from habit show a different list
+   with no error. `--system` cannot be reused for the same reason, so the
+   word is `-root`, which names the thing: a root unit. `install -root`
+   writes the root daemon's service file: `com.amarit.root` in
+   `/Library/LaunchDaemons` with no `UserName`, or
+   `/etc/systemd/system/amarit.service` with no `User=`; both labels are
+   distinct from the per-user ones, so the tiers coexist on one machine.
+8. *The uid-0 guard.* Issue #4's `amarit daemon` refuses uid 0 and keeps
+   doing so. The root tier is `amarit daemon -root`, a distinct mode
+   entered only from its own service file: it refuses to run as anyone but
+   root, refuses when rule 1 fails, and never reads `AMARIT_HOME`. Each
+   mode refuses the other's uid, so a per-user service file that lost its
+   user line exits non-zero and the supervisor's log says why, rather than
+   a root daemon over a user's files.
+9. *Platforms.* Linux and macOS as above; the only difference is the base
+   layout, which follows each system's convention, and that systemd could
+   do the user drop itself while launchd cannot, which is one more reason
+   the drop lives in the daemon. Other platforms get nothing: there is no
+   `install` there, so no root tier, and the detached daemon refuses uid 0
+   under #4 like everything else.
+
+Not taken: a setuid helper (a second trust boundary to get right, for no
+gain over a daemon that already runs as root); a sudoers rule for `amarit`
+(hands root to whoever can write the user's units); polkit (Linux-only,
+and a policy language to maintain). Until (B) exists, (C) is the
+documented path.
+
 ## Consumers, in order
 
 1. A stateless tunnel agent on a canary channel.
