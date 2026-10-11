@@ -330,7 +330,7 @@ func run(args []string) error {
 			*name += "-" + strings.TrimLeft(rest[0], "-")
 		}
 	}
-	if err := guard(bin, *force); err != nil {
+	if err := guard(bin, rest, *force); err != nil {
 		return err
 	}
 	base := amarit.DefaultBase()
@@ -450,7 +450,7 @@ func start(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := guard(u.Binary, force); err != nil {
+	if err := guard(u.Binary, u.Args, force); err != nil {
 		return err
 	}
 	return base.Enable(args[0], true)

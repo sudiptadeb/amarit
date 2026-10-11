@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -21,8 +22,8 @@ type finding struct {
 // guard refuses to add a program a second supervisor already keeps running,
 // since the two restart it in a loop; -force overrides. The probe is best
 // effort: when it cannot look, it finds nothing.
-func guard(binary string, force bool) error {
-	found := otherSupervisors(binary)
+func guard(binary string, args []string, force bool) error {
+	found := otherSupervisors(binary, args)
 	if len(found) == 0 {
 		return nil
 	}
@@ -37,18 +38,25 @@ func guard(binary string, force bool) error {
 	return errors.New("two supervisors for one program restart it in a loop; remove the other first, or add -force")
 }
 
-func otherSupervisors(binary string) []finding {
+func otherSupervisors(binary string, args []string) []finding {
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "darwin":
-		return scanLaunchd([]string{"/Library/LaunchDaemons", "/Library/LaunchAgents", filepath.Join(home, "Library", "LaunchAgents")}, binary)
+		return scanLaunchd([]string{"/Library/LaunchDaemons", "/Library/LaunchAgents", filepath.Join(home, "Library", "LaunchAgents")}, binary, args)
 	case "linux":
 		return scanSystemd([]string{
 			"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system",
 			"/etc/systemd/user", "/usr/lib/systemd/user", filepath.Join(home, ".config", "systemd", "user"),
-		}, binary)
+		}, binary, args)
 	}
 	return nil
+}
+
+// sameJob is the same program with the same arguments, where a side that
+// gives no arguments matches any. The arguments matter for interpreters:
+// two `sh -c` jobs with different scripts are different programs.
+func sameJob(program string, args []string, binary string, want []string) bool {
+	return program != "" && sameProgram(program, binary) && (len(args) == 0 || len(want) == 0 || slices.Equal(args, want))
 }
 
 // sameProgram compares paths with symlinks resolved, so a versioned binary
@@ -64,7 +72,7 @@ func sameProgram(a, b string) bool {
 
 // scanLaunchd reads the plists in dirs and reports jobs whose program is
 // binary. Binary plists do not parse and are skipped.
-func scanLaunchd(dirs []string, binary string) []finding {
+func scanLaunchd(dirs []string, binary string, args []string) []finding {
 	var out []finding
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -80,8 +88,8 @@ func scanLaunchd(dirs []string, binary string) []finding {
 			if err != nil {
 				continue
 			}
-			jobLabel, program := plistProgram(data)
-			if jobLabel == label || program == "" || !sameProgram(program, binary) {
+			jobLabel, program, jobArgs := plistProgram(data)
+			if jobLabel == label || !sameJob(program, jobArgs, binary, args) {
 				continue
 			}
 			domain, sudo := "gui/"+uid(), ""
@@ -100,16 +108,23 @@ func scanLaunchd(dirs []string, binary string) []finding {
 	return out
 }
 
-// plistProgram pulls Label and the program path (Program, else the first
-// ProgramArguments entry) out of an XML plist. Only keys of the top-level
-// dict count; EnvironmentVariables and the like nest their own.
-func plistProgram(data []byte) (jobLabel, program string) {
+// plistProgram pulls Label, the program path (Program, else the first
+// ProgramArguments entry) and the remaining arguments out of an XML plist.
+// Only keys of the top-level dict count; EnvironmentVariables and the like
+// nest their own.
+func plistProgram(data []byte) (jobLabel, program string, args []string) {
 	dec := xml.NewDecoder(bytes.NewReader(data))
-	depth, key := 0, ""
+	depth, key, argv := 0, "", []string(nil)
 	for {
 		tok, err := dec.Token()
 		if err != nil {
-			return jobLabel, program
+			if program == "" && len(argv) > 0 {
+				program = argv[0]
+			}
+			if len(argv) > 1 {
+				args = argv[1:]
+			}
+			return jobLabel, program, args
 		}
 		switch t := tok.(type) {
 		case xml.EndElement:
@@ -137,8 +152,9 @@ func plistProgram(data []byte) (jobLabel, program string) {
 					jobLabel = v
 				case depth == 1 && key == "Program":
 					program = v
-				case depth == 2 && key == "ProgramArguments" && program == "":
-					program = v
+				case depth == 2 && key == "ProgramArguments":
+					argv = append(argv, v)
+					continue // stay in the array
 				}
 				key = ""
 			}
@@ -148,7 +164,7 @@ func plistProgram(data []byte) (jobLabel, program string) {
 
 // scanSystemd reads the service files in dirs and reports units whose
 // ExecStart runs binary.
-func scanSystemd(dirs []string, binary string) []finding {
+func scanSystemd(dirs []string, binary string, args []string) []finding {
 	var out []finding
 	for _, dir := range dirs {
 		entries, err := os.ReadDir(dir)
@@ -160,7 +176,7 @@ func scanSystemd(dirs []string, binary string) []finding {
 				continue
 			}
 			path := filepath.Join(dir, e.Name())
-			if program := execStart(path); program == "" || !sameProgram(program, binary) {
+			if program, unitArgs := execStart(path); !sameJob(program, unitArgs, binary, args) {
 				continue
 			}
 			cmd := "sudo systemctl disable --now " + e.Name()
@@ -173,12 +189,12 @@ func scanSystemd(dirs []string, binary string) []finding {
 	return out
 }
 
-// execStart returns the program of the unit file's ExecStart line, without
-// systemd's prefix characters.
-func execStart(path string) string {
+// execStart returns the program and arguments of the unit file's ExecStart
+// line, without systemd's prefix characters.
+func execStart(path string) (string, []string) {
 	f, err := os.Open(path)
 	if err != nil {
-		return ""
+		return "", nil
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -186,9 +202,9 @@ func execStart(path string) string {
 		line := strings.TrimSpace(sc.Text())
 		if v, ok := strings.CutPrefix(line, "ExecStart="); ok {
 			if fields := strings.Fields(strings.TrimLeft(v, "-@:+!")); len(fields) > 0 {
-				return fields[0]
+				return fields[0], fields[1:]
 			}
 		}
 	}
-	return ""
+	return "", nil
 }

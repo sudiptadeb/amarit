@@ -32,15 +32,19 @@ func TestGuardFindsOtherSupervisors(t *testing.T) {
 	os.WriteFile(filepath.Join(systemd, "web.service"), []byte("[Service]\nExecStart=-"+bin+" -serve\n"), 0o644)
 	os.WriteFile(filepath.Join(systemd, "other.service"), []byte("[Service]\nExecStart=/usr/bin/true\n"), 0o644)
 
-	found := scanLaunchd([]string{launchd, filepath.Join(dir, "missing")}, bin)
+	found := scanLaunchd([]string{launchd, filepath.Join(dir, "missing")}, bin, []string{"-serve"})
 	if len(found) != 1 || !strings.Contains(found[0].what, "com.example.web") || !strings.Contains(found[0].remove, "launchctl bootout") {
 		t.Fatalf("launchd scan found %+v", found)
 	}
-	found = scanSystemd([]string{systemd}, bin)
+	found = scanSystemd([]string{systemd}, bin, nil)
 	if len(found) != 1 || !strings.Contains(found[0].what, "web.service") || !strings.HasPrefix(found[0].remove, "systemctl --user disable") {
 		t.Fatalf("systemd scan found %+v", found)
 	}
-	if guard(bin, true) != nil {
+	// Same interpreter, different script: not the same job.
+	if found := scanLaunchd([]string{launchd}, bin, []string{"-other"}); len(found) != 0 {
+		t.Fatalf("different arguments must not match, got %+v", found)
+	}
+	if guard(bin, nil, true) != nil {
 		t.Fatal("-force must let it through")
 	}
 }
