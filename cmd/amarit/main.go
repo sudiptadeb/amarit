@@ -52,6 +52,9 @@ func main() {
 		err = named(os.Args[2:], amarit.DefaultBase().RemoveUnit)
 	case "logs":
 		err = logs(os.Args[2:])
+	case "__exec":
+		// Hidden: the daemon starts a unit that has limits through this.
+		err = amarit.ExecLimited(os.Args[2:])
 	case "version", "-version", "--version":
 		fmt.Println(buildVersion())
 	case "-h", "--help", "help":

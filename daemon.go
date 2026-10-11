@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,7 +35,19 @@ type Unit struct {
 	// StopTimeout is how long a stop waits after SIGTERM before SIGKILL, a
 	// duration like "60s"; default 10s. Signals go to the whole process group.
 	StopTimeout string `json:"stop_timeout,omitempty"`
+	// Limits are resource limits for the process, by name: {"nofile": 65536}.
+	Limits map[string]uint64 `json:"limits,omitempty"`
 }
+
+// knownLimits are the names Limits accepts.
+var knownLimits = []string{"nofile"}
+
+// The daemon starts a unit that has limits through its own executable as
+// `<self> __exec <binary> [args...]`, with the limits in AMARIT_LIMITS.
+const (
+	execSubcommand = "__exec"
+	limitsEnv      = "AMARIT_LIMITS"
+)
 
 const defaultStopTimeout = 10 * time.Second
 
@@ -94,6 +108,11 @@ func (b Base) SaveUnit(u Unit) error {
 	if u.StopTimeout != "" {
 		if d, err := time.ParseDuration(u.StopTimeout); err != nil || d <= 0 {
 			return fmt.Errorf("unit %s: stop_timeout %q must be a duration like 30s", u.Name, u.StopTimeout)
+		}
+	}
+	for name := range u.Limits {
+		if !slices.Contains(knownLimits, name) {
+			return fmt.Errorf("unit %s: unknown limit %q (known: %s)", u.Name, name, strings.Join(knownLimits, ", "))
 		}
 	}
 	if err := b.ensure(); err != nil {
@@ -232,11 +251,13 @@ type Daemon struct {
 	base     Base
 	children map[string]*child
 	tick     time.Duration
+	self     string // this executable, which plays the exec helper for units with limits
 }
 
 // NewDaemon prepares a daemon over base.
 func NewDaemon(base Base) *Daemon {
-	return &Daemon{base: base, children: map[string]*child{}, tick: 2 * time.Second}
+	self, _ := os.Executable()
+	return &Daemon{base: base, children: map[string]*child{}, tick: 2 * time.Second, self: self}
 }
 
 // Run supervises until ctx is cancelled. It adopts processes a previous
@@ -347,6 +368,11 @@ func (d *Daemon) reconcile() {
 func (d *Daemon) start(c *child) {
 	u := c.unit
 	cmd := exec.Command(u.Binary, u.Args...)
+	if len(u.Limits) > 0 && d.self != "" {
+		// Limits can only be set from inside the process, so the unit is
+		// started through amarit itself, which sets them and execs the binary.
+		cmd = exec.Command(d.self, append([]string{execSubcommand, u.Binary}, u.Args...)...)
+	}
 	cmd.Dir = u.Dir
 	cmd.Env = os.Environ()
 	if u.EnvFile != "" {
@@ -360,6 +386,13 @@ func (d *Daemon) start(c *child) {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.Env = append(cmd.Env, "AMARIT_MANAGED=1", "AMARIT_UNIT="+u.Name)
+	if len(u.Limits) > 0 {
+		var limits []string
+		for _, name := range slices.Sorted(maps.Keys(u.Limits)) {
+			limits = append(limits, name+"="+strconv.FormatUint(u.Limits[name], 10))
+		}
+		cmd.Env = append(cmd.Env, limitsEnv+"="+strings.Join(limits, ","))
+	}
 	logPath := filepath.Join(d.base.logs(), u.Name+".log")
 	rotateLog(logPath)
 	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)

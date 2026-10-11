@@ -196,6 +196,9 @@ WantedBy=default.target
 	return nil
 }
 
+// plistFor writes the daemon's job. launchd gives services 256 open files;
+// the soft limit is raised so units inherit a usable default and their own
+// "limits" can go higher still.
 func plistFor(self string, base amarit.Base, userName string) string {
 	userKey := ""
 	if userName != "" {
@@ -221,6 +224,11 @@ func plistFor(self string, base amarit.Base, userName string) string {
 		<string>%s</string>
 		<key>PATH</key>
 		<string>%s/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+	<key>SoftResourceLimits</key>
+	<dict>
+		<key>NumberOfFiles</key>
+		<integer>65536</integer>
 	</dict>
 	<key>RunAtLoad</key>
 	<true/>

@@ -2,6 +2,7 @@ package amarit
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,18 @@ import (
 	"testing"
 	"time"
 )
+
+// The daemon starts a unit with limits through its own executable, which in
+// tests is this binary, so it plays the helper when started that way.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == execSubcommand {
+		if err := ExecLimited(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	os.Exit(m.Run())
+}
 
 func script(t *testing.T, dir, name, body string) string {
 	t.Helper()
