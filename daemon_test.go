@@ -3,11 +3,14 @@ package amarit
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -325,5 +328,45 @@ func TestLogRotatesWhileRunning(t *testing.T) {
 		prev, err := os.Stat(logPath + ".1")
 		b, _ := os.ReadFile(logPath)
 		return err == nil && prev.Size() > maxLogSize && len(b) < 4096 && strings.HasPrefix(string(b), "tick")
+	})
+}
+
+// After the daemon updates itself in place its units are still its own
+// children, so an adopted process that exits must be reaped and seen to
+// have exited, not left as a zombie that looks alive.
+func TestAdoptedOwnChildIsReaped(t *testing.T) {
+	dir := t.TempDir()
+	base := Base(filepath.Join(dir, "base"))
+	if err := base.ensure(); err != nil {
+		t.Fatal(err)
+	}
+	sleeper := script(t, dir, "sleeper", `exec sleep 60`)
+	if err := base.SaveUnit(Unit{Name: "sleeper", Binary: sleeper}); err != nil {
+		t.Fatal(err)
+	}
+	// Spawned by this process and never waited for: what the previous
+	// daemon image leaves behind when it execs.
+	cmd := exec.Command(sleeper)
+	cmd.SysProcAttr = sysProcAttr()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	status, _ := json.Marshal(Status{Name: "sleeper", PID: pid, State: "running", Since: time.Now()})
+	os.WriteFile(filepath.Join(base.run(), "sleeper.json"), status, 0o644)
+
+	d := NewDaemon(base)
+	d.tick = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+	waitFor(t, "daemon to adopt", func() bool {
+		s, _ := base.Statuses()
+		return s["sleeper"].PID == pid
+	})
+	_ = signalGroup(pid, syscall.SIGKILL)
+	waitFor(t, "the exit to be noticed and the unit restarted", func() bool {
+		s, _ := base.Statuses()
+		return s["sleeper"].PID != 0 && s["sleeper"].PID != pid && s["sleeper"].Restarts == 1
 	})
 }

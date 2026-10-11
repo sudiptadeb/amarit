@@ -373,7 +373,10 @@ type Daemon struct {
 	base     Base
 	children map[string]*child
 	tick     time.Duration
-	self     string // this executable, which plays the exec helper for units with limits
+	self     string     // this executable, which plays the exec helper for units with limits
+	mu       sync.Mutex // held while reconcile runs; Drain takes it so a restart lands between passes
+	// Version is what the daemon logs about itself at start; the program sets it.
+	Version string
 }
 
 // NewDaemon prepares a daemon over base.
@@ -395,10 +398,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return err
 	}
 	defer os.Remove(d.base.pidFile())
-	log.Printf("amarit: daemon %d supervising %s", os.Getpid(), d.base)
+	log.Printf("amarit%s: daemon %d supervising %s", d.versionTag(), os.Getpid(), d.base)
 	d.adopt()
 	for {
+		d.mu.Lock()
 		d.reconcile()
+		d.mu.Unlock()
 		select {
 		case <-ctx.Done():
 			log.Printf("amarit: daemon stopping; units keep running")
@@ -406,6 +411,38 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case <-time.After(d.tick):
 		}
 	}
+}
+
+func (d *Daemon) versionTag() string {
+	if d.Version == "" {
+		return ""
+	}
+	return " " + d.Version
+}
+
+// Preflight is the daemon's readiness check for amarit.Healthy: a daemon
+// that can read its units and write its run state is one that can take
+// over from the version before it.
+func (d *Daemon) Preflight() bool {
+	if err := d.base.ensure(); err != nil {
+		return false
+	}
+	_, err := d.base.Units()
+	return err == nil
+}
+
+// Drain is the daemon's hook for amarit.Drain: it waits for the current
+// reconcile pass to finish and holds the next one back, so the exec that
+// follows finds no stop half done. The exec replaces this image, so the lock
+// is never released in that path; should the exec fail, it is released once
+// the drain deadline has passed, and the daemon carries on.
+func (d *Daemon) Drain(ctx context.Context) {
+	d.mu.Lock()
+	go func() {
+		<-ctx.Done()
+		time.Sleep(drainTimeout)
+		d.mu.Unlock()
+	}()
 }
 
 // adopt picks up processes that a previous daemon started and left alive.
@@ -427,18 +464,6 @@ func instanceLess(a, b string) bool {
 		return an < bn
 	}
 	return ai < bi
-}
-
-// watchPID polls a process amarit did not spawn, since it cannot wait() on it.
-func watchPID(pid int) chan error {
-	ch := make(chan error, 1)
-	go func() {
-		for processAlive(pid) {
-			time.Sleep(time.Second)
-		}
-		ch <- errors.New("exited (adopted process; exit status unknown)")
-	}()
-	return ch
 }
 
 func (d *Daemon) reconcile() {
