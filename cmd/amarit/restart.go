@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/sudiptadeb/amarit"
@@ -12,6 +11,12 @@ import (
 
 // settle is how long a rolling restart watches each unit before moving on.
 const settle = 2 * time.Second
+
+// target is one instance to restart, with the stop timeout of its unit.
+type target struct {
+	name  string
+	grace time.Duration
+}
 
 // restart asks the daemon to restart every unit or instance a pattern names.
 func restart(args []string) error {
@@ -31,35 +36,43 @@ func restart(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !rolling {
-		t0 := time.Now()
-		for _, name := range targets {
-			if err := base.RequestRestart(name); err != nil {
-				return err
-			}
-		}
-		for _, name := range targets {
-			if _, err := waitRestarted(base, name, t0, graceOf(units, name)); err != nil {
+	if rolling {
+		for _, t := range targets {
+			if err := restartOne(base, t); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	for _, name := range targets {
-		t0 := time.Now()
-		if err := base.RequestRestart(name); err != nil {
+	t0 := time.Now()
+	for _, t := range targets {
+		if err := base.RequestRestart(t.name); err != nil {
 			return err
 		}
-		s, err := waitRestarted(base, name, t0, graceOf(units, name))
-		if err != nil {
+	}
+	for _, t := range targets {
+		if _, err := waitRestarted(base, t, t0); err != nil {
 			return err
 		}
-		// Up is not enough; it has to stay up before the next one goes.
-		time.Sleep(settle)
-		now, _ := base.Statuses()
-		if cur := now[name]; cur.State != "running" || cur.PID != s.PID {
-			return fmt.Errorf("%s: exited after the restart (%s); stopping the roll", name, cur.LastExit)
-		}
+	}
+	return nil
+}
+
+// restartOne is one step of a rolling restart: up is not enough, the unit
+// has to stay up before the next one goes.
+func restartOne(base amarit.Base, t target) error {
+	t0 := time.Now()
+	if err := base.RequestRestart(t.name); err != nil {
+		return err
+	}
+	s, err := waitRestarted(base, t, t0)
+	if err != nil {
+		return err
+	}
+	time.Sleep(settle)
+	now, _ := base.Statuses()
+	if cur := now[t.name]; cur.State != "running" || cur.PID != s.PID {
+		return fmt.Errorf("%s: exited after the restart (%s); stopping the roll", t.name, cur.LastExit)
 	}
 	return nil
 }
@@ -79,24 +92,23 @@ func takeFlag(args []string, name string) ([]string, bool) {
 	return rest, found
 }
 
-// matchUnits expands names and glob patterns to instance names, in the
-// order given. A pattern matches a unit (all its instances) or instances.
-func matchUnits(patterns []string, units []amarit.Unit) ([]string, error) {
+// matchUnits expands names and glob patterns to instances, in the order
+// given. A pattern matches a unit (all its instances) or single instances.
+func matchUnits(patterns []string, units []amarit.Unit) ([]target, error) {
 	seen := map[string]bool{}
-	var out []string
+	var out []target
 	for _, pat := range patterns {
 		hit := false
 		for _, u := range units {
+			whole, _ := path.Match(pat, u.Name)
 			for _, name := range u.InstanceNames() {
-				if ok, _ := path.Match(pat, u.Name); !ok {
-					if ok, _ = path.Match(pat, name); !ok {
-						continue
-					}
+				if ok, _ := path.Match(pat, name); !ok && !whole {
+					continue
 				}
 				hit = true
 				if !seen[name] {
 					seen[name] = true
-					out = append(out, name)
+					out = append(out, target{name, u.StopGrace()})
 				}
 			}
 		}
@@ -107,32 +119,22 @@ func matchUnits(patterns []string, units []amarit.Unit) ([]string, error) {
 	return out, nil
 }
 
-// graceOf is the stop timeout of the unit an instance belongs to.
-func graceOf(units []amarit.Unit, name string) time.Duration {
-	unit, _, _ := strings.Cut(name, "@")
-	for _, u := range units {
-		if u.Name == unit {
-			return u.StopGrace()
-		}
-	}
-	return amarit.Unit{}.StopGrace()
-}
-
 // waitRestarted waits for the daemon to have started the unit again after
 // t0 and reports how it came up.
-func waitRestarted(base amarit.Base, name string, t0 time.Time, grace time.Duration) (amarit.Status, error) {
-	deadline := time.Now().Add(grace + 30*time.Second)
+func waitRestarted(base amarit.Base, t target, t0 time.Time) (amarit.Status, error) {
+	limit := t.grace + 30*time.Second
+	deadline := time.Now().Add(limit)
 	for time.Now().Before(deadline) {
 		statuses, _ := base.Statuses()
-		s := statuses[name]
+		s := statuses[t.name]
 		if s.Since.After(t0) {
 			if s.State == "running" {
-				fmt.Printf("%s restarted, pid %d\n", name, s.PID)
+				fmt.Printf("%s restarted, pid %d\n", t.name, s.PID)
 				return s, nil
 			}
-			return s, fmt.Errorf("%s: %s after the restart (see amarit logs %s)", name, s.LastExit, name)
+			return s, fmt.Errorf("%s: %s after the restart (see amarit logs %s)", t.name, s.LastExit, t.name)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return amarit.Status{}, fmt.Errorf("%s: the daemon did not restart it within %s", name, grace+30*time.Second)
+	return amarit.Status{}, fmt.Errorf("%s: the daemon did not restart it within %s", t.name, limit)
 }

@@ -358,11 +358,12 @@ func waitRunning(base amarit.Base, name string) error {
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) {
 		s, _ := base.Statuses()
-		if st, ok := s[name]; ok && st.State == "running" {
+		st := s[name]
+		if st.State == "running" {
 			fmt.Printf("%s running, pid %d\n", name, st.PID)
 			return nil
 		}
-		if st, ok := s[name]; ok && st.LastExit != "" {
+		if st.LastExit != "" {
 			return fmt.Errorf("%s: %s (see amarit logs %s)", name, st.LastExit, name)
 		}
 		time.Sleep(200 * time.Millisecond)

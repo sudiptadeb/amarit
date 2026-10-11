@@ -52,11 +52,12 @@ func otherSupervisors(binary string, args []string) []finding {
 	return nil
 }
 
-// sameJob is the same program with the same arguments, where a side that
-// gives no arguments matches any. The arguments matter for interpreters:
-// two `sh -c` jobs with different scripts are different programs.
-func sameJob(program string, args []string, binary string, want []string) bool {
-	return program != "" && sameProgram(program, binary) && (len(args) == 0 || len(want) == 0 || slices.Equal(args, want))
+// sameJob reports whether a job found on disk runs the unit's program with
+// its arguments; a side that gives no arguments matches any. The arguments
+// matter for interpreters: two `sh -c` jobs with different scripts are
+// different programs.
+func sameJob(jobProgram string, jobArgs []string, binary string, args []string) bool {
+	return jobProgram != "" && sameProgram(jobProgram, binary) && (len(jobArgs) == 0 || len(args) == 0 || slices.Equal(jobArgs, args))
 }
 
 // sameProgram compares paths with symlinks resolved, so a versioned binary

@@ -13,9 +13,13 @@ func TestMatchUnits(t *testing.T) {
 		{Name: "web", Binary: "/x"},
 		{Name: "worker", Binary: "/x", Instances: 3},
 	}
-	got, err := matchUnits([]string{"worker@2", "w*"}, units)
+	targets, err := matchUnits([]string{"worker@2", "w*"}, units)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var got []string
+	for _, t := range targets {
+		got = append(got, t.name)
 	}
 	if want := "worker@2 web worker@1 worker@3"; strings.Join(got, " ") != want {
 		t.Fatalf("matched %q, want %q", strings.Join(got, " "), want)
