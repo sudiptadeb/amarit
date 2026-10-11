@@ -239,34 +239,23 @@ func (u *Updater) installID() []byte {
 // Apply downloads, verifies, smoke-tests and swaps in the decided version,
 // then execs it in place. It returns only on failure; on success the
 // process image has been replaced.
+//
+// Processes running the same binary (the instances of a worker) take turns
+// through a lock in the sidecar; the ones that find the version already
+// swapped in by a sibling skip straight to the restart.
 func (u *Updater) Apply(ctx context.Context, d *Decision) error {
 	if !d.Update {
 		return errors.New("nothing to apply")
 	}
-	tmp, err := u.download(ctx, d.Asset)
+	unlock, err := lockFile(filepath.Join(u.sidecar(), "lock"))
 	if err != nil {
+		return fmt.Errorf("lock: %w", err)
+	}
+	defer unlock()
+	if u.loadState().Attempt == d.Version {
+		log.Printf("amarit: %s is already in place", d.Version)
+	} else if err := u.swap(ctx, d); err != nil {
 		return err
-	}
-	defer os.Remove(tmp)
-
-	if err := smokeTest(ctx, tmp); err != nil {
-		return err
-	}
-
-	st := u.loadState()
-	st.Attempt, st.From, st.Starts = d.Version, strings.TrimPrefix(u.cfg.Version, "v"), 0
-	if err := u.saveState(st); err != nil {
-		return fmt.Errorf("state: %w", err)
-	}
-
-	prev := u.prevPath()
-	_ = os.Remove(prev)
-	if err := os.Rename(u.exe, prev); err != nil {
-		return fmt.Errorf("swap: %w", err)
-	}
-	if err := os.Rename(tmp, u.exe); err != nil {
-		_ = os.Rename(prev, u.exe)
-		return fmt.Errorf("swap: %w", err)
 	}
 
 	if u.cfg.Drain != nil {
@@ -292,8 +281,43 @@ func (u *Updater) Apply(ctx context.Context, d *Decision) error {
 			env = append(env, entry)
 		}
 	}
-	log.Printf("amarit: %s %s -> %s, restarting", u.cfg.Project, st.From, d.Version)
+	log.Printf("amarit: %s %s -> %s, restarting", u.cfg.Project, strings.TrimPrefix(u.cfg.Version, "v"), d.Version)
 	return u.execFn(u.exe, u.argv, env)
+}
+
+// swap puts the decided version on disk: download, smoke test, record the
+// attempt, keep the running binary as prev. Nothing is touched before
+// every check has passed; a failed swap leaves the state as it was.
+func (u *Updater) swap(ctx context.Context, d *Decision) error {
+	tmp, err := u.download(ctx, d.Asset)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+
+	if err := smokeTest(ctx, tmp); err != nil {
+		return err
+	}
+
+	was := u.loadState()
+	st := was
+	st.Attempt, st.From, st.Starts = d.Version, strings.TrimPrefix(u.cfg.Version, "v"), 0
+	if err := u.saveState(st); err != nil {
+		return fmt.Errorf("state: %w", err)
+	}
+
+	prev := u.prevPath()
+	_ = os.Remove(prev)
+	if err := os.Rename(u.exe, prev); err != nil {
+		_ = u.saveState(was)
+		return fmt.Errorf("swap: %w", err)
+	}
+	if err := os.Rename(tmp, u.exe); err != nil {
+		_ = os.Rename(prev, u.exe)
+		_ = u.saveState(was)
+		return fmt.Errorf("swap: %w", err)
+	}
+	return nil
 }
 
 // download streams the asset into the executable's own directory, hashing

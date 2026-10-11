@@ -253,3 +253,22 @@ func TestApplyFromLocalDirectory(t *testing.T) {
 		t.Fatal("the new binary is not in place")
 	}
 }
+
+// Instances of one binary take turns: a process that finds the version
+// already swapped in by a sibling restarts into it and downloads nothing.
+func TestApplySkipsSwapDoneBySibling(t *testing.T) {
+	dir := t.TempDir()
+	exe := fakeBinary(t, dir, "demo", "v0.6.0")
+	u := testUpdater(t, nil, exe, "0.5.0")
+	u.saveState(state{Attempt: "0.6.0", From: "0.5.0"})
+	execd := false
+	u.execFn = func(string, []string, []string) error { execd = true; return nil }
+
+	d := &Decision{Version: "0.6.0", Update: true, Asset: Asset{URL: "http://127.0.0.1:1/unreachable", Size: assetSize, SHA256: assetSHA}}
+	if err := u.Apply(context.Background(), d); err != nil || !execd {
+		t.Fatalf("apply: %v, execd %v", err, execd)
+	}
+	if _, err := os.Stat(u.prevPath()); err == nil {
+		t.Fatal("the binary was swapped a second time")
+	}
+}
