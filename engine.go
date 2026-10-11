@@ -48,6 +48,9 @@ type state struct {
 	From    string `json:"from,omitempty"`    // version running before the attempt
 	Starts  int    `json:"starts,omitempty"`  // starts since the attempt without a healthy mark
 	Healthy string `json:"healthy,omitempty"` // last version that reported healthy
+	// Rejected is the version the last rollback took out. It is not taken
+	// again, or an unhealthy release would be retried every interval.
+	Rejected string `json:"rejected,omitempty"`
 }
 
 const (
@@ -205,6 +208,8 @@ func (u *Updater) Check(ctx context.Context) (*Decision, error) {
 	switch {
 	case cmp == 0:
 		d.Reason = "already on " + running
+	case version == u.loadState().Rejected:
+		d.Reason = fmt.Sprintf("%s was rolled back on this install; waiting for a newer release", version)
 	case cmp > 0 && !u.opts.AllowDowngrade:
 		d.Reason = fmt.Sprintf("running %s is newer than %s; not downgrading", running, version)
 	case m.Stale(time.Now()) && !belowFloor:
@@ -403,7 +408,7 @@ func (u *Updater) reconcile() bool {
 			_ = os.Remove(bad)
 			if err := os.Rename(u.exe, bad); err == nil {
 				if err := os.Rename(prev, u.exe); err == nil {
-					_ = u.saveState(state{Healthy: st.From})
+					_ = u.saveState(state{Healthy: st.From, Rejected: running})
 					if err := u.execFn(u.exe, u.argv, os.Environ()); err == nil {
 						return true // only a stubbed exec returns
 					}

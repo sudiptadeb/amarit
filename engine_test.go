@@ -216,7 +216,7 @@ func TestReconcileHealthyThenRollback(t *testing.T) {
 	if got, _ := os.ReadFile(exe); !strings.Contains(string(got), "v0.5.0") {
 		t.Fatal("the previous binary was not restored")
 	}
-	if st := u.loadState(); st.Healthy != "0.5.0" || st.Attempt != "" {
+	if st := u.loadState(); st.Healthy != "0.5.0" || st.Attempt != "" || st.Rejected != "0.6.0" {
 		t.Fatalf("state after rollback: %+v", st)
 	}
 
@@ -270,5 +270,23 @@ func TestApplySkipsSwapDoneBySibling(t *testing.T) {
 	}
 	if _, err := os.Stat(u.prevPath()); err == nil {
 		t.Fatal("the binary was swapped a second time")
+	}
+}
+
+// A version that was rolled back is not taken again from the same channel;
+// the next release is.
+func TestCheckSkipsRejectedVersion(t *testing.T) {
+	dir := t.TempDir()
+	exe := fakeBinary(t, dir, "demo", "v0.5.0")
+	srv := serve(t, manifestFor("0.6.0", "0.5.0", ""), assetBody)
+	u := testUpdater(t, srv, exe, "0.5.0")
+	u.saveState(state{Healthy: "0.5.0", Rejected: "0.6.0"})
+	d, err := u.Check(context.Background())
+	if err != nil || d.Update || !strings.Contains(d.Reason, "rolled back") {
+		t.Fatalf("check: %v %+v", err, d)
+	}
+	u.saveState(state{Healthy: "0.5.0", Rejected: "0.5.9"})
+	if d, err := u.Check(context.Background()); err != nil || !d.Update {
+		t.Fatalf("a different version must be taken: %v %+v", err, d)
 	}
 }
