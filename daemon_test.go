@@ -64,9 +64,7 @@ func TestDaemonStartsRestartsAndStops(t *testing.T) {
 
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 
 	var pid int
 	waitFor(t, "sleeper to run", func() bool {
@@ -120,9 +118,7 @@ func TestDaemonAdoptsAfterRestart(t *testing.T) {
 
 	second := NewDaemon(base)
 	second.tick = 100 * time.Millisecond
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go second.Run(ctx2)
+	runDaemon(t, second)
 	waitFor(t, "second daemon to adopt", func() bool {
 		s, _ := base.Statuses()
 		return s["sleeper"].PID == pid && s["sleeper"].State == "running"
@@ -189,9 +185,7 @@ func TestStopKillsTheProcessGroupAfterTheGrace(t *testing.T) {
 	}
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 
 	var pid, child int
 	waitFor(t, "stubborn and its child to run", func() bool {
@@ -223,9 +217,7 @@ func TestNeverPolicyRunsOnce(t *testing.T) {
 	}
 	d := NewDaemon(base)
 	d.tick = 50 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 	waitFor(t, "once to exit", func() bool {
 		s, _ := base.Statuses()
 		return s["once"].State == "exited"
@@ -246,9 +238,7 @@ func TestInstancesRunNamedCopies(t *testing.T) {
 	}
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 
 	var pid1, pid2 int
 	var seen string
@@ -303,9 +293,7 @@ func TestRequestedRestartIsNotAFailure(t *testing.T) {
 	}
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 	var pid int
 	waitFor(t, "sleeper to run", func() bool {
 		s, _ := base.Statuses()
@@ -338,9 +326,7 @@ func TestLogRotatesWhileRunning(t *testing.T) {
 	}
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 	logPath := filepath.Join(base.logs(), "chatty.log")
 	waitFor(t, "chatty to write", func() bool {
 		b, _ := os.ReadFile(logPath)
@@ -383,9 +369,7 @@ func TestAdoptedOwnChildIsReaped(t *testing.T) {
 
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go d.Run(ctx)
+	runDaemon(t, d)
 	waitFor(t, "daemon to adopt", func() bool {
 		s, _ := base.Statuses()
 		return s["sleeper"].PID == pid
@@ -394,5 +378,24 @@ func TestAdoptedOwnChildIsReaped(t *testing.T) {
 	waitFor(t, "the exit to be noticed and the unit restarted", func() bool {
 		s, _ := base.Statuses()
 		return s["sleeper"].PID != 0 && s["sleeper"].PID != pid && s["sleeper"].Restarts == 1
+	})
+}
+
+// runDaemon runs d until the test ends, then stops it and the units it left
+// running, before the test's directories are removed under them.
+func runDaemon(t *testing.T, d *Daemon) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { d.Run(ctx); close(done) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		var running []*child
+		for _, c := range d.children {
+			if c.pid != 0 {
+				running = append(running, c)
+			}
+		}
+		stopAll(running)
 	})
 }
