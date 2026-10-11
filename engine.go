@@ -79,11 +79,9 @@ func newUpdater(cfg Config, opts Options, argv []string) (*Updater, error) {
 	}, nil
 }
 
+// manifestURL is cfg.Releases, which resolve already let --update-url win.
 func (u *Updater) manifestURL() string {
 	raw := u.cfg.Releases
-	if u.opts.ManifestURL != "" {
-		raw = u.opts.ManifestURL
-	}
 	// A plain path is a local manifest: a build that publishes to a
 	// directory on the same machine needs no web server.
 	if !strings.Contains(raw, "://") {

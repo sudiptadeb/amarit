@@ -2,6 +2,7 @@ package amarit
 
 import (
 	"encoding/base64"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -37,17 +38,28 @@ func TestParseProjectConfig(t *testing.T) {
 	}
 }
 
-func TestStampedConfig(t *testing.T) {
+// quiet clears the environment and the build facts for one test, so only
+// the layer under test speaks.
+func quiet(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{"AMARIT_AUTO_UPDATE", "AMARIT_MANAGED", "AMARIT_UPDATE_INTERVAL"} {
+		t.Setenv(k, "")
+	}
 	stampedProject, stampedVersion = "", ""
-	c, err := stampedConfig()
-	if err != nil || c.Releases != "" {
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return nil, false }
+	t.Cleanup(func() { readBuildInfo = debug.ReadBuildInfo })
+}
+
+func TestResolveStamp(t *testing.T) {
+	quiet(t)
+	c, err := resolve(nil, Options{})
+	if err != nil || c.Releases != "" || c.Version != "" {
 		t.Fatalf("unstamped build: %+v %v", c, err)
 	}
 
 	stampedProject = base64.StdEncoding.EncodeToString([]byte(goodConfig))
 	stampedVersion = "v0.5.3"
-	defer func() { stampedProject, stampedVersion = "", "" }()
-	c, err = stampedConfig()
+	c, err = resolve(nil, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,53 +67,116 @@ func TestStampedConfig(t *testing.T) {
 		t.Fatalf("stamped config = %+v", c)
 	}
 	stampedProject = "not base64!"
-	if _, err := stampedConfig(); err == nil {
+	if _, err := resolve(nil, Options{}); err == nil {
 		t.Fatal("a corrupt stamp must be an error, not silence")
 	}
 }
 
-func TestCheckIntervalPrecedence(t *testing.T) {
-	t.Setenv("AMARIT_UPDATE_INTERVAL", "")
-	if got := checkInterval(Config{}, 0); got != time.Hour {
-		t.Fatalf("default = %v", got)
+// A program that carries its amarit.json itself (go:embed) hands it over
+// with ProjectFile and gets the same Config a stamp would give.
+func TestResolveProjectFile(t *testing.T) {
+	quiet(t)
+	c, err := resolve([]Option{ProjectFile([]byte(goodConfig))}, Options{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := checkInterval(Config{Interval: 5 * time.Minute}, 0); got != 5*time.Minute {
-		t.Fatalf("config = %v", got)
+	if c.Project != "termulaa" || c.Restart != Overlap || c.Interval != 5*time.Minute || !c.AutoUpdate {
+		t.Fatalf("embedded config = %+v", c)
 	}
-	t.Setenv("AMARIT_UPDATE_INTERVAL", "2m")
-	if got := checkInterval(Config{Interval: 5 * time.Minute}, 0); got != 2*time.Minute {
-		t.Fatalf("env over config = %v", got)
-	}
-	if got := checkInterval(Config{Interval: 5 * time.Minute}, 30*time.Second); got != 30*time.Second {
-		t.Fatalf("flag over env = %v", got)
+	c, err = resolve([]Option{ProjectFile([]byte(`{"project":"x"}`))}, Options{})
+	if err == nil || c.Project != "" {
+		t.Fatalf("an invalid file must be reported and change nothing: %+v %v", c, err)
 	}
 }
 
-func TestAutoUpdatePrecedence(t *testing.T) {
-	t.Setenv("AMARIT_AUTO_UPDATE", "")
-	t.Setenv("AMARIT_MANAGED", "")
-	if autoUpdate(Config{}, Options{}) {
+// With no stamp and no option, the version is the module version Go
+// recorded in the binary: a `go install` build knows what it is.
+func TestResolveModuleVersion(t *testing.T) {
+	quiet(t)
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v0.5.2"}}, true
+	}
+	c, _ := resolve(nil, Options{})
+	if c.Version != "0.5.2" {
+		t.Fatalf("module version: %q", c.Version)
+	}
+	stampedVersion = "0.5.3"
+	if c, _ := resolve(nil, Options{}); c.Version != "0.5.3" {
+		t.Fatalf("the stamp must win over the module: %q", c.Version)
+	}
+	if c, _ := resolve([]Option{Version("9.0.0")}, Options{}); c.Version != "9.0.0" {
+		t.Fatalf("code must win over the stamp: %q", c.Version)
+	}
+}
+
+// Options in code lay over the stamped file, and a program without any
+// amarit.json configures itself through them alone.
+func TestResolveOptionsOverStamp(t *testing.T) {
+	quiet(t)
+	stampedProject = base64.StdEncoding.EncodeToString([]byte(goodConfig))
+	c, _ := resolve([]Option{Releases("https://mirror/releases.json"), Interval(time.Minute)}, Options{})
+	if c.Project != "termulaa" || c.Releases != "https://mirror/releases.json" || c.Interval != time.Minute {
+		t.Fatalf("options over stamp = %+v", c)
+	}
+	stampedProject = ""
+	c, _ = resolve([]Option{Project("app"), Releases("https://m"), Version("1.0.0"), AutoUpdate(true)}, Options{})
+	if c.Project != "app" || c.Releases != "https://m" || c.Version != "1.0.0" || !c.AutoUpdate {
+		t.Fatalf("hardcoded options = %+v", c)
+	}
+}
+
+func TestResolveIntervalPrecedence(t *testing.T) {
+	quiet(t)
+	if c, _ := resolve(nil, Options{}); c.Interval != time.Hour {
+		t.Fatalf("default = %v", c.Interval)
+	}
+	in := []Option{Interval(5 * time.Minute)}
+	if c, _ := resolve(in, Options{}); c.Interval != 5*time.Minute {
+		t.Fatalf("config = %v", c.Interval)
+	}
+	t.Setenv("AMARIT_UPDATE_INTERVAL", "2m")
+	if c, _ := resolve(in, Options{}); c.Interval != 2*time.Minute {
+		t.Fatalf("env over config = %v", c.Interval)
+	}
+	if c, _ := resolve(in, Options{Interval: 30 * time.Second}); c.Interval != 30*time.Second {
+		t.Fatalf("flag over env = %v", c.Interval)
+	}
+}
+
+func TestResolveAutoUpdatePrecedence(t *testing.T) {
+	quiet(t)
+	on := []Option{AutoUpdate(true)}
+	if c, _ := resolve(nil, Options{}); c.AutoUpdate {
 		t.Fatal("nothing said: must be off")
 	}
-	if !autoUpdate(Config{AutoUpdate: true}, Options{}) {
+	if c, _ := resolve(on, Options{}); !c.AutoUpdate {
 		t.Fatal("the project's default must turn it on")
 	}
-	if !autoUpdate(Config{}, Options{AutoUpdate: true}) {
+	if c, _ := resolve(nil, Options{AutoUpdate: true}); !c.AutoUpdate {
 		t.Fatal("--auto-update must turn it on")
 	}
 	t.Setenv("AMARIT_MANAGED", "1")
-	if !autoUpdate(Config{}, Options{}) {
+	if c, _ := resolve(nil, Options{}); !c.AutoUpdate {
 		t.Fatal("a unit under the daemon must be on")
 	}
 	t.Setenv("AMARIT_AUTO_UPDATE", "0")
-	if autoUpdate(Config{AutoUpdate: true}, Options{}) {
+	if c, _ := resolve(on, Options{}); c.AutoUpdate {
 		t.Fatal("AMARIT_AUTO_UPDATE=0 must beat the project's default and the daemon")
 	}
-	if !autoUpdate(Config{}, Options{AutoUpdate: true}) {
+	if c, _ := resolve(nil, Options{AutoUpdate: true}); !c.AutoUpdate {
 		t.Fatal("--auto-update must beat the environment")
 	}
 	t.Setenv("AMARIT_AUTO_UPDATE", "1")
-	if autoUpdate(Config{AutoUpdate: true}, Options{NoAutoUpdate: true}) {
+	if c, _ := resolve(on, Options{NoAutoUpdate: true}); c.AutoUpdate {
 		t.Fatal("--no-auto-update must beat everything")
+	}
+}
+
+// --update-url and --update-key are command-line layers over the file.
+func TestResolveCommandLineOverFile(t *testing.T) {
+	quiet(t)
+	c, _ := resolve([]Option{ProjectFile([]byte(goodConfig)), Key("author")}, Options{ManifestURL: "https://m", Key: "K"})
+	if c.Releases != "https://m" || c.Key != "K" {
+		t.Fatalf("command line over file = %+v", c)
 	}
 }

@@ -104,6 +104,23 @@ func TestCheckDecisions(t *testing.T) {
 	}
 }
 
+// A `go install` build of the released version differs byte for byte from
+// the release asset. Versions are compared, not bytes, so it is current and
+// is never replaced; only an older build takes the asset, and once.
+func TestCheckSameVersionWithDifferentBytesIsCurrent(t *testing.T) {
+	dir := t.TempDir()
+	exe := fakeBinary(t, dir, "demo", "v0.6.0") // not assetBody
+	srv := serve(t, manifestFor("0.6.0", "0.6.0", ""), assetBody)
+	u := testUpdater(t, srv, exe, "0.6.0")
+	d, err := u.Check(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Update || !strings.Contains(d.Reason, "already on 0.6.0") {
+		t.Fatalf("update=%v reason=%q", d.Update, d.Reason)
+	}
+}
+
 func TestCheckRefusesOtherProject(t *testing.T) {
 	srv := serve(t, func(a string) string {
 		return `{"spec":1,"project":"other","published":"2026-10-09T00:00:00Z","channels":{"stable":"1.0.0"},"releases":{"1.0.0":{"assets":{}}}}`

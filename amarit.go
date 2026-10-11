@@ -6,11 +6,12 @@
 //
 //	amarit.Start()
 //
-// It reads the amarit.json stamped into the binary at build time, strips
-// its own flags from os.Args, and does nothing unless the program was run
-// with --auto-update, --update-check or the update subcommand, or the
-// project declared auto-update its default ("auto_update": true) and the
-// user did not say --no-auto-update.
+// It reads the project's amarit.json, stamped into the binary at build time
+// or handed over with ProjectFile, or the same facts given as options;
+// strips its own flags from os.Args; and does nothing unless the program
+// was run with --auto-update, --update-check or the update subcommand, or
+// the project declared auto-update its default ("auto_update": true) and
+// the user did not say --no-auto-update.
 package amarit
 
 import (
@@ -27,11 +28,13 @@ import (
 // yet. See the roadmap in README.md.
 var ErrNotImplemented = errors.New("amarit: not implemented yet")
 
-// Config is everything a program tells amarit once. Start fills it from the
-// stamped amarit.json; Options override single fields.
+// Config is everything a program tells amarit once. Start resolves it in
+// one pass from the build (the stamped amarit.json, the module version Go
+// recorded), the options, the environment and the command line, later
+// layers winning; the engine then runs on the result.
 type Config struct {
 	Project  string // must equal the manifest's "project"
-	Version  string // the running version, usually stamped at build
+	Version  string // the running version: stamped, from the module, or set in code
 	Releases string // the releases.json URL; --update-url overrides it
 	Key      string // the author's minisign public key; empty = hash tier
 	Exact    bool   // exact-match versions instead of semver order
@@ -46,6 +49,8 @@ type Config struct {
 	Values  func() map[string]string  // small named values to carry across the restart
 	Drain   func(ctx context.Context) // called before the restart, with a deadline
 	Healthy func() bool               // gates rollback; nil means healthy on start
+
+	err error // the first amarit.json that did not parse; Start reports it
 }
 
 // RestartStrategy is how the new binary takes over from the running one.
@@ -62,16 +67,19 @@ const (
 	Overlap
 )
 
-// Option adjusts the Config that Start builds from the stamp.
+// Option adjusts the Config Start resolves. Options are applied in the
+// order given, over the stamp and under the environment and command line;
+// a program with no amarit.json at all says everything through them.
 type Option func(*Config)
 
-// Project sets the project name (normally stamped).
+// Project sets the project name (normally from amarit.json).
 func Project(name string) Option { return func(c *Config) { c.Project = name } }
 
-// Version sets the running version (normally stamped).
+// Version sets the running version (normally stamped, or the module version
+// Go recorded in the binary).
 func Version(v string) Option { return func(c *Config) { c.Version = v } }
 
-// Releases sets the manifest URL (normally stamped).
+// Releases sets the manifest URL (normally from amarit.json).
 func Releases(url string) Option { return func(c *Config) { c.Releases = url } }
 
 // Key sets the author's public key and enables the signed tier.
@@ -128,39 +136,32 @@ type Options struct {
 
 var current *Updater
 
-// Start is the one call a program makes. It builds the Config from the
-// stamped amarit.json and the given options, parses amarit's own flags out
+// Start is the one call a program makes. It parses amarit's own flags out
 // of os.Args and strips them so the program's flag parsing never sees them,
-// then does what the flags ask: nothing, one check (--update-check), a
-// check-apply-exit (update), or a background loop (--auto-update). A
-// successful update replaces the process image, so there is no "after" for
-// the old version.
-func Start(opts ...Option) Options {
-	cfg, err := stampedConfig()
-	if err != nil {
-		log.Printf("amarit: %v", err)
-	}
-	for _, o := range opts {
-		o(&cfg)
-	}
-	return run(cfg)
-}
-
-func run(cfg Config) Options {
+// resolves the Config from the build, the given options, the environment
+// and those flags, then does what the flags ask: nothing, one check
+// (--update-check), a check-apply-exit (update), or a background loop
+// (--auto-update). A successful update replaces the process image, so there
+// is no "after" for the old version.
+func Start(options ...Option) Options {
 	argv := append([]string(nil), os.Args...)
 	opts, rest := parseArgs(os.Args[1:])
 	os.Args = append(os.Args[:1], rest...)
+	cfg, err := resolve(options, opts)
+	if err != nil {
+		log.Printf("amarit: %v", err)
+	}
 	if opts.Channel == "" {
 		opts.Channel = "stable"
 	}
-	opts.Interval = checkInterval(cfg, opts.Interval)
+	opts.Interval = cfg.Interval
 	if !opts.Update {
-		opts.AutoUpdate = autoUpdate(cfg, opts)
+		opts.AutoUpdate = cfg.AutoUpdate
 	}
 	if !opts.AutoUpdate && !opts.CheckOnce && !opts.Update {
 		return opts
 	}
-	if cfg.Releases == "" && opts.ManifestURL == "" {
+	if cfg.Releases == "" {
 		log.Printf("amarit: no releases URL in this build; updates are off")
 		if opts.Update {
 			os.Exit(1)
@@ -199,28 +200,6 @@ func run(cfg Config) Options {
 	return opts
 }
 
-// autoUpdate resolves whether the loop runs, the layers later in the list
-// winning: the program's own default (auto_update in amarit.json, or
-// amarit.AutoUpdate in code) or the amarit daemon's AMARIT_MANAGED=1, then
-// AMARIT_AUTO_UPDATE=1|0 in the environment, then --auto-update or
-// --no-auto-update on the command line. Nothing is detected: every "on"
-// here is a word somebody wrote down.
-func autoUpdate(cfg Config, opts Options) bool {
-	switch {
-	case opts.NoAutoUpdate:
-		return false
-	case opts.AutoUpdate:
-		return true
-	}
-	switch os.Getenv("AMARIT_AUTO_UPDATE") {
-	case "0":
-		return false
-	case "1":
-		return true
-	}
-	return cfg.AutoUpdate || os.Getenv("AMARIT_MANAGED") == "1"
-}
-
 // Apply updates to a version the program learned about through its own
 // control channel. The version must be a release in the manifest; the
 // channel pointer is not consulted. On success the process image is
@@ -243,22 +222,6 @@ func Apply(ctx context.Context, version string) error {
 		return fmt.Errorf("amarit: release %s has no asset for %s", version, u.target)
 	}
 	return u.Apply(ctx, &Decision{Manifest: d.Manifest, Version: version, Asset: a, Update: true, Reason: "requested"})
-}
-
-// checkInterval resolves the auto-update cadence: --update-interval, then
-// AMARIT_UPDATE_INTERVAL, then the program's Config (code option or
-// amarit.json), then one hour.
-func checkInterval(cfg Config, flag time.Duration) time.Duration {
-	if flag > 0 {
-		return flag
-	}
-	if d, err := time.ParseDuration(os.Getenv("AMARIT_UPDATE_INTERVAL")); err == nil && d > 0 {
-		return d
-	}
-	if cfg.Interval > 0 {
-		return cfg.Interval
-	}
-	return defaultInterval
 }
 
 // parseArgs separates amarit's flags from the program's own arguments.
