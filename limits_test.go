@@ -20,9 +20,6 @@ func TestLimitsReachTheUnitProcess(t *testing.T) {
 	if err := base.SaveUnit(Unit{Name: "probe", Binary: probe, Limits: map[string]uint64{"nofile": 1234}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := base.SaveUnit(Unit{Name: "bad", Binary: probe, Limits: map[string]uint64{"nproc": 1}}); err == nil {
-		t.Fatal("an unknown limit name must be refused")
-	}
 	d := NewDaemon(base)
 	d.tick = 100 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())

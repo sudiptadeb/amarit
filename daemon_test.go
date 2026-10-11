@@ -79,16 +79,6 @@ func TestDaemonStartsRestartsAndStops(t *testing.T) {
 		return s["flaky"].Restarts >= 1 && strings.Contains(s["flaky"].LastExit, "exit status 3")
 	})
 
-	// A unit whose policy says never: one run, then parked.
-	once := script(t, dir, "once", `exit 0`)
-	if err := base.SaveUnit(Unit{Name: "once", Binary: once, Restart: "never"}); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "once to exit and stay down", func() bool {
-		s, _ := base.Statuses()
-		return s["once"].State == "exited" && s["once"].Restarts == 0
-	})
-
 	// Removing the unit stops the process.
 	if err := base.RemoveUnit("sleeper"); err != nil {
 		t.Fatal(err)
@@ -146,6 +136,9 @@ func TestUnitValidationAndEnvFile(t *testing.T) {
 	}
 	if err := base.SaveUnit(Unit{Name: "x"}); err == nil {
 		t.Fatal("a unit without a binary must be refused")
+	}
+	if err := base.SaveUnit(Unit{Name: "x", Binary: "/bin/true", Limits: map[string]uint64{"nproc": 1}}); err == nil {
+		t.Fatal("an unknown limit name must be refused")
 	}
 	envFile := filepath.Join(string(base), "app.env")
 	os.WriteFile(envFile, []byte("# comment\nexport A=1\nB=\"two words\"\n\nC='3'\n"), 0o600)

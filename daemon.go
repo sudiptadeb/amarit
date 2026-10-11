@@ -46,33 +46,35 @@ type Unit struct {
 // InstanceNames lists the names the daemon runs this unit under: the unit's
 // own name, or <name>@1 .. <name>@N when it has instances.
 func (u Unit) InstanceNames() []string {
-	if u.Instances <= 0 {
-		return []string{u.Name}
-	}
-	names := make([]string, 0, u.Instances)
-	for i := 1; i <= u.Instances; i++ {
-		names = append(names, fmt.Sprintf("%s@%d", u.Name, i))
+	var names []string
+	for _, c := range u.instances() {
+		names = append(names, c.Name)
 	}
 	return names
 }
 
-// instance is the unit as its i-th copy; 0 is the unit itself.
-func (u Unit) instance(i int) Unit {
-	if i == 0 {
-		return u
+// instances is what the daemon runs for this unit: the unit itself, or one
+// copy per instance named <name>@<i> with {instance} filled in.
+func (u Unit) instances() []Unit {
+	if u.Instances <= 0 {
+		return []Unit{u}
 	}
-	n := strconv.Itoa(i)
-	c := u
-	c.Name = u.Name + "@" + n
-	c.Args = make([]string, len(u.Args))
-	for j, a := range u.Args {
-		c.Args[j] = strings.ReplaceAll(a, "{instance}", n)
+	out := make([]Unit, 0, u.Instances)
+	for i := 1; i <= u.Instances; i++ {
+		n := strconv.Itoa(i)
+		c := u
+		c.Name = u.Name + "@" + n
+		c.Args = make([]string, len(u.Args))
+		for j, a := range u.Args {
+			c.Args[j] = strings.ReplaceAll(a, "{instance}", n)
+		}
+		c.Env = make(map[string]string, len(u.Env))
+		for k, v := range u.Env {
+			c.Env[k] = strings.ReplaceAll(v, "{instance}", n)
+		}
+		out = append(out, c)
 	}
-	c.Env = make(map[string]string, len(u.Env))
-	for k, v := range u.Env {
-		c.Env[k] = strings.ReplaceAll(v, "{instance}", n)
-	}
-	return c
+	return out
 }
 
 // splitInstance takes "worker@3" apart; a plain name has index 0.
@@ -211,11 +213,10 @@ func (b Base) Enable(name string, on bool) error {
 			return b.SaveUnit(u)
 		case u.Name == unitName && idx >= 1 && idx <= u.Instances:
 			if on {
-				err := os.Remove(b.stopMarker(name))
-				if os.IsNotExist(err) {
-					return nil
+				if err := os.Remove(b.stopMarker(name)); err != nil && !os.IsNotExist(err) {
+					return err
 				}
-				return err
+				return nil
 			}
 			if err := b.ensure(); err != nil {
 				return err
@@ -354,19 +355,16 @@ func (u Unit) wantsRestart(exitCode int, err error) bool {
 	}
 }
 
-// child is one supervised process.
+// child is one supervised process; its name is the daemon's key everywhere.
 type child struct {
 	unit     Unit
-	cmd      *exec.Cmd
-	pid      int
+	pid      int // 0 while it is down
 	started  time.Time
 	restarts int
 	backoff  time.Duration
 	next     time.Time // earliest next start after an exit
 	lastExit string
 	done     chan error
-	log      *os.File
-	instance int  // 1-based for a unit with instances; 0 otherwise
 	parked   bool // exited and its policy says not to restart; waits for the unit file to change
 }
 
@@ -415,8 +413,7 @@ func (d *Daemon) adopt() {
 	statuses, _ := d.base.Statuses()
 	for name, s := range statuses {
 		if s.PID != 0 && processAlive(s.PID) {
-			_, i := splitInstance(name)
-			d.children[name] = &child{unit: Unit{Name: name}, instance: i, pid: s.PID, started: s.Since, restarts: s.Restarts, done: watchPID(s.PID)}
+			d.children[name] = &child{unit: Unit{Name: name}, pid: s.PID, started: s.Since, restarts: s.Restarts, done: watchPID(s.PID)}
 			log.Printf("amarit: adopted %s (pid %d)", name, s.PID)
 		}
 	}
@@ -455,9 +452,9 @@ func (d *Daemon) reconcile() {
 		if !u.enabled() {
 			continue
 		}
-		for _, name := range u.InstanceNames() {
-			if _, i := splitInstance(name); !d.base.Stopped(name) {
-				want[name] = u.instance(i)
+		for _, c := range u.instances() {
+			if !d.base.Stopped(c.Name) {
+				want[c.Name] = c
 			}
 		}
 	}
@@ -471,31 +468,27 @@ func (d *Daemon) reconcile() {
 		}
 	}
 	sort.Slice(gone, func(i, j int) bool { return instanceLess(gone[j].unit.Name, gone[i].unit.Name) })
-	d.stopAll(gone)
-	// Restarts asked for with `amarit restart`: together, then fresh starts.
+	stopAll(gone)
+	// `amarit restart`: stop those together; the loop below starts them
+	// fresh, as the operator asked, with no backoff and no failure recorded.
 	var again []*child
 	for _, name := range d.base.takeRestartRequests() {
-		if c, ok := d.children[name]; ok && want[name].Name != "" {
+		if c, ok := d.children[name]; ok {
+			log.Printf("amarit: %s: restart requested", name)
 			again = append(again, c)
 		}
 	}
 	sort.Slice(again, func(i, j int) bool { return instanceLess(again[i].unit.Name, again[j].unit.Name) })
-	d.stopAll(again)
+	stopAll(again)
 	for _, c := range again {
-		c.unit = want[c.unit.Name]
 		c.backoff, c.next, c.lastExit, c.parked = time.Second, time.Time{}, "", false
-		log.Printf("amarit: %s: restart requested", c.unit.Name)
-		d.start(c)
 	}
 	// Start, restart, or notice exits.
 	for name, u := range want {
 		c, ok := d.children[name]
 		if !ok {
-			_, i := splitInstance(name)
-			c = &child{unit: u, instance: i, backoff: time.Second}
+			c = &child{backoff: time.Second}
 			d.children[name] = c
-			d.start(c)
-			continue
 		}
 		if c.parked {
 			// A changed unit file is the operator's word to try again.
@@ -517,74 +510,65 @@ func (d *Daemon) reconcile() {
 		default:
 		}
 	}
-	for name, c := range d.children {
+	for _, c := range d.children {
 		if c.pid != 0 {
-			rotateLog(filepath.Join(d.base.logs(), name+".log"))
+			rotateLog(filepath.Join(d.base.logs(), c.unit.Name+".log"))
 		}
-		d.writeStatus(name, c)
+		d.writeStatus(c)
 	}
 }
 
 func (d *Daemon) start(c *child) {
 	u := c.unit
-	cmd := exec.Command(u.Binary, u.Args...)
-	if len(u.Limits) > 0 && d.self != "" {
-		// Limits can only be set from inside the process, so the unit is
-		// started through amarit itself, which sets them and execs the binary.
-		cmd = exec.Command(d.self, append([]string{execSubcommand, u.Binary}, u.Args...)...)
-	}
-	cmd.Dir = u.Dir
-	cmd.Env = os.Environ()
+	env := os.Environ()
 	if u.EnvFile != "" {
 		if extra, err := readEnvFile(u.EnvFile); err == nil {
-			cmd.Env = append(cmd.Env, extra...)
+			env = append(env, extra...)
 		} else {
 			log.Printf("amarit: %s: env file: %v", u.Name, err)
 		}
 	}
 	for k, v := range u.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
+		env = append(env, k+"="+v)
 	}
-	cmd.Env = append(cmd.Env, "AMARIT_MANAGED=1", "AMARIT_UNIT="+u.Name)
-	if c.instance > 0 {
-		cmd.Env = append(cmd.Env, "AMARIT_INSTANCE="+strconv.Itoa(c.instance))
+	env = append(env, "AMARIT_MANAGED=1", "AMARIT_UNIT="+u.Name)
+	if _, i := splitInstance(u.Name); i > 0 {
+		env = append(env, "AMARIT_INSTANCE="+strconv.Itoa(i))
 	}
-	if len(u.Limits) > 0 {
+	cmd := exec.Command(u.Binary, u.Args...)
+	if len(u.Limits) > 0 && d.self != "" {
+		// Limits can only be set from inside the process, so the unit is
+		// started through amarit itself, which sets them and execs the binary.
+		cmd = exec.Command(d.self, append([]string{execSubcommand, u.Binary}, u.Args...)...)
 		var limits []string
 		for _, name := range slices.Sorted(maps.Keys(u.Limits)) {
 			limits = append(limits, name+"="+strconv.FormatUint(u.Limits[name], 10))
 		}
-		cmd.Env = append(cmd.Env, limitsEnv+"="+strings.Join(limits, ","))
+		env = append(env, limitsEnv+"="+strings.Join(limits, ","))
 	}
-	logPath := filepath.Join(d.base.logs(), u.Name+".log")
-	rotateLog(logPath)
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	cmd.Dir, cmd.Env, cmd.SysProcAttr = u.Dir, env, sysProcAttr()
+	// The program gets its own descriptor to the log; the daemon keeps none.
+	f, err := os.OpenFile(filepath.Join(d.base.logs(), u.Name+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		log.Printf("amarit: %s: log: %v", u.Name, err)
 		return
 	}
+	defer f.Close()
 	cmd.Stdout, cmd.Stderr = f, f
-	cmd.Stdin = nil
-	cmd.SysProcAttr = sysProcAttr()
 	if err := cmd.Start(); err != nil {
-		f.Close()
 		c.lastExit = err.Error()
 		c.next = time.Now().Add(c.backoff)
 		c.backoff = min(c.backoff*2, time.Minute)
 		log.Printf("amarit: %s: start: %v (retry in %s)", u.Name, err, c.backoff)
 		return
 	}
-	c.cmd, c.pid, c.started, c.log = cmd, cmd.Process.Pid, time.Now(), f
+	c.pid, c.started = cmd.Process.Pid, time.Now()
 	c.done = make(chan error, 1)
-	go func(cmd *exec.Cmd, done chan error) { done <- cmd.Wait() }(cmd, c.done)
+	go func(done chan error) { done <- cmd.Wait() }(c.done)
 	log.Printf("amarit: %s: started pid %d", u.Name, c.pid)
 }
 
 func (d *Daemon) exited(c *child, err error) {
-	if c.log != nil {
-		c.log.Close()
-		c.log = nil
-	}
 	code := 0
 	if err != nil {
 		c.lastExit = err.Error()
@@ -597,9 +581,13 @@ func (d *Daemon) exited(c *child, err error) {
 	}
 	uptime := time.Since(c.started)
 	pid := c.pid
-	c.pid, c.cmd = 0, nil
-	// Whatever the program left behind still holds its memory and ports.
-	reapGroup(c.unit.Name, pid, c.unit.StopGrace())
+	c.pid = 0
+	if groupAlive(pid) {
+		// Whatever the program left behind still holds its memory and ports.
+		log.Printf("amarit: %s: pid %d left processes behind; stopping them", c.unit.Name, pid)
+		_ = signalGroup(pid, syscall.SIGTERM)
+		go killAfterGrace(c.unit.Name, pid, c.unit.StopGrace())
+	}
 	if !c.unit.wantsRestart(code, err) {
 		c.parked = true
 		log.Printf("amarit: %s: %s; not restarting (policy)", c.unit.Name, c.lastExit)
@@ -614,79 +602,44 @@ func (d *Daemon) exited(c *child, err error) {
 	c.backoff = min(c.backoff*2, time.Minute)
 }
 
-// stopAll stops children together: every group is told to stop first, in
-// the order given, then each is waited for, so eight workers with a 60 s
-// grace take 60 s, not eight minutes.
-func (d *Daemon) stopAll(cs []*child) {
-	for _, c := range cs {
-		d.terminate(c)
-	}
+// stopAll stops running children together: every process group is told to
+// stop first, in the order given, then each is waited for, so eight workers
+// with a 60 s grace take 60 s, not eight minutes. A child was started in its
+// own session, so its pid is the group id and its own children go with it.
+func stopAll(cs []*child) {
 	var wg sync.WaitGroup
 	for _, c := range cs {
+		if c.pid == 0 {
+			continue
+		}
+		log.Printf("amarit: %s: stopping pid %d", c.unit.Name, c.pid)
+		_ = signalGroup(c.pid, syscall.SIGTERM)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			d.awaitExit(c)
+			killAfterGrace(c.unit.Name, c.pid, c.unit.StopGrace())
+			<-c.done
+			c.pid = 0
 		}()
 	}
 	wg.Wait()
 }
 
-// terminate asks a child's whole process group to stop. The child was
-// started with its own session, so its pid is the group id, and programs
-// that spawn their own children take them along.
-func (d *Daemon) terminate(c *child) {
-	if c.pid == 0 {
-		return
-	}
-	log.Printf("amarit: %s: stopping pid %d", c.unit.Name, c.pid)
-	_ = signalGroup(c.pid, syscall.SIGTERM)
-}
-
-// awaitExit waits for a terminated child's group to be gone, up to the
-// unit's stop timeout, then kills what is left.
-func (d *Daemon) awaitExit(c *child) {
-	if c.pid == 0 {
-		return
-	}
-	grace := c.unit.StopGrace()
+// killAfterGrace gives a group that was sent SIGTERM the grace to leave,
+// then kills what is left.
+func killAfterGrace(name string, pid int, grace time.Duration) {
 	deadline := time.Now().Add(grace)
-	for groupAlive(c.pid) && time.Now().Before(deadline) {
+	for groupAlive(pid) && time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)
 	}
-	if groupAlive(c.pid) {
-		log.Printf("amarit: %s: still running %s after SIGTERM; killing", c.unit.Name, grace)
-		_ = signalGroup(c.pid, syscall.SIGKILL)
+	if groupAlive(pid) {
+		log.Printf("amarit: %s: still running %s after SIGTERM; killing", name, grace)
+		_ = signalGroup(pid, syscall.SIGKILL)
 	}
-	<-c.done
-	if c.log != nil {
-		c.log.Close()
-		c.log = nil
-	}
-	c.pid, c.cmd = 0, nil
 }
 
-// reapGroup handles a program that exited and left children behind: they
-// get the same SIGTERM, grace and SIGKILL a stop gives the group.
-func reapGroup(name string, pid int, grace time.Duration) {
-	if !groupAlive(pid) {
-		return
-	}
-	log.Printf("amarit: %s: pid %d left processes behind; stopping them", name, pid)
-	_ = signalGroup(pid, syscall.SIGTERM)
-	go func() {
-		deadline := time.Now().Add(grace)
-		for groupAlive(pid) && time.Now().Before(deadline) {
-			time.Sleep(100 * time.Millisecond)
-		}
-		if groupAlive(pid) {
-			_ = signalGroup(pid, syscall.SIGKILL)
-		}
-	}()
-}
-
-func (d *Daemon) writeStatus(name string, c *child) {
-	s := Status{Name: name, PID: c.pid, Since: c.started, Restarts: c.restarts, LastExit: c.lastExit, NextStart: c.next}
+func (d *Daemon) writeStatus(c *child) {
+	s := Status{Name: c.unit.Name, PID: c.pid, Since: c.started, Restarts: c.restarts, LastExit: c.lastExit, NextStart: c.next}
 	switch {
 	case c.pid != 0:
 		s.State = "running"
@@ -696,7 +649,7 @@ func (d *Daemon) writeStatus(name string, c *child) {
 		s.State = "backoff"
 	}
 	data, _ := json.MarshalIndent(s, "", "  ")
-	_ = os.WriteFile(filepath.Join(d.base.run(), name+".json"), data, 0o644)
+	_ = os.WriteFile(filepath.Join(d.base.run(), c.unit.Name+".json"), data, 0o644)
 }
 
 func readEnvFile(path string) ([]string, error) {
