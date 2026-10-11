@@ -110,6 +110,8 @@ type Options struct {
 	// Update is the "update" subcommand: check, apply, print the running
 	// version, exit. The one-shot form for people and scripts.
 	Update bool
+	// UpdateCheck is "update --check": say what is available, apply nothing.
+	UpdateCheck bool
 }
 
 var current *Updater
@@ -167,7 +169,11 @@ func run(cfg Config) Options {
 		// A successful apply execs the new binary with this same command
 		// line; the new process lands here again, reports "already on",
 		// and exits. So the user sees the final version either way.
-		fine := u.once(context.Background())
+		check := u.once
+		if opts.UpdateCheck {
+			check = u.report
+		}
+		fine := check(context.Background())
 		fmt.Fprintf(os.Stderr, "%s %s\n", cfg.Project, strings.TrimPrefix(cfg.Version, "v"))
 		if !fine {
 			os.Exit(1)
@@ -268,6 +274,12 @@ func parseArgs(args []string) (Options, []string) {
 		case "update":
 			if i == 0 {
 				o.Update = true
+				continue
+			}
+			rest = append(rest, a)
+		case "--check", "-check":
+			if o.Update {
+				o.UpdateCheck = true
 				continue
 			}
 			rest = append(rest, a)

@@ -410,6 +410,17 @@ func (u *Updater) loop(ctx context.Context, interval time.Duration) {
 	}
 }
 
+// report is one check that applies nothing, for `update --check`.
+func (u *Updater) report(ctx context.Context) bool {
+	d, err := u.Check(ctx)
+	if err != nil {
+		log.Printf("amarit: check: %v", err)
+		return false
+	}
+	log.Printf("amarit: %s", d.Reason)
+	return true
+}
+
 // once is one check-and-apply; it reports whether that went without error.
 func (u *Updater) once(ctx context.Context) bool {
 	d, err := u.Check(ctx)
