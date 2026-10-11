@@ -131,11 +131,11 @@ func loadConfig(path string) (*amarit.ProjectConfig, []byte, error) {
 	return c, raw, err
 }
 
-// stamp prints the linker flags that put amarit.config and the version into
+// stamp prints the linker flags that put amarit.json and the version into
 // the binary, so a build script can do: go build -ldflags "$(amarit stamp -version X)".
 func stamp(args []string) error {
 	fs := flag.NewFlagSet("stamp", flag.ContinueOnError)
-	config := fs.String("config", "amarit.config", "project configuration")
+	config := fs.String("config", "amarit.json", "project configuration")
 	version := fs.String("version", "", "version being built")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -147,21 +147,23 @@ func stamp(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("-X github.com/sudiptadeb/amarit.stampedConfig=%s -X github.com/sudiptadeb/amarit.stampedVersion=%s\n",
+	fmt.Printf("-X github.com/sudiptadeb/amarit.stampedProject=%s -X github.com/sudiptadeb/amarit.stampedVersion=%s\n",
 		base64.StdEncoding.EncodeToString(raw), strings.TrimPrefix(*version, "v"))
 	return nil
 }
 
 // release hashes the built assets and writes the manifest. The asset file
-// name and its download URL come from patterns in amarit.config, with
-// {version}, {os}, {arch} and {asset} filled in.
+// name and its download URL come from patterns in amarit.json, with
+// {version}, {os}, {arch} and {asset} filled in. Without a url pattern the
+// url is the asset's name, which a client resolves against the manifest's
+// own location: the assets sit beside releases.json.
 func release(args []string) error {
 	fs := flag.NewFlagSet("release", flag.ContinueOnError)
-	config := fs.String("config", "amarit.config", "project configuration")
+	config := fs.String("config", "amarit.json", "project configuration")
 	version := fs.String("version", "", "version being released")
 	dist := fs.String("dist", "dist", "directory holding the built assets")
 	channel := fs.String("channel", "stable", "channel to point at this version")
-	out := fs.String("out", "amarit.json", "manifest to write")
+	out := fs.String("out", "releases.json", "manifest to write")
 	expires := fs.Duration("expires", 0, "how long the manifest stays fresh (0 = no expiry)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -176,8 +178,12 @@ func release(args []string) error {
 	if c.Release == nil || len(c.Release.Targets) == 0 {
 		return fmt.Errorf("%s: release.targets is empty", *config)
 	}
-	if c.Release.Asset == "" || c.Release.URL == "" {
-		return fmt.Errorf("%s: release.asset and release.url patterns are required", *config)
+	if c.Release.Asset == "" {
+		return fmt.Errorf("%s: release.asset pattern is required", *config)
+	}
+	urlPattern := c.Release.URL
+	if urlPattern == "" {
+		urlPattern = "{asset}"
 	}
 	v := strings.TrimPrefix(*version, "v")
 
@@ -216,7 +222,7 @@ func release(args []string) error {
 		if err != nil {
 			return err
 		}
-		url := strings.NewReplacer("{version}", v, "{os}", goos, "{arch}", goarch, "{asset}", name).Replace(c.Release.URL)
+		url := strings.NewReplacer("{version}", v, "{os}", goos, "{arch}", goarch, "{asset}", name).Replace(urlPattern)
 		assets[target] = amarit.Asset{URL: url, SHA256: sum, Size: size}
 		fmt.Fprintf(os.Stderr, "  %-14s %s  %d bytes  %s\n", target, name, size, sum[:12])
 	}
