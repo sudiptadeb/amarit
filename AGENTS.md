@@ -13,8 +13,12 @@ follows it, not the other way round.
 
 ## Rules
 
-1. Opt-in, no magic. Nothing updates without `--auto-update`. Do not add
-   detection of TTYs, tmux, package managers or "what the user probably meant".
+1. Opt-in, no magic. Nothing updates unless somebody wrote it down: the user
+   with `--auto-update` (or `AMARIT_AUTO_UPDATE=1`), the operator by running
+   the program as an amarit unit, or the project by declaring
+   `"auto_update": true` in its amarit.json, in which case its users opt out
+   with `--no-auto-update` or `AMARIT_AUTO_UPDATE=0`. Do not add detection of
+   TTYs, tmux, package managers or "what the user probably meant".
 2. Works unsigned. Never make a signature a prerequisite for the hash tier.
 3. Exec in place on Unix. Do not introduce a parent/child supervisor model;
    the PID must survive an update so launchd, systemd and nohup keep working.

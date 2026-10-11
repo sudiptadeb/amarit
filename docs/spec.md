@@ -147,6 +147,7 @@ manifest and stamped into the binary so the program hardcodes nothing:
   "key": "RWQ…",
   "restart": "overlap",
   "interval": "5m",
+  "auto_update": true,
   "service": {
     "instances": 1,
     "env_file": "data/app.env",
@@ -165,6 +166,7 @@ manifest and stamped into the binary so the program hardcodes nothing:
 | `key` | the author's minisign public key; present means the signed tier |
 | `restart` | `in-place` (default) or `overlap` for zero-downtime handover |
 | `interval` | how often `--auto-update` checks, a Go duration (default `1h`); `amarit.Interval()` in code, `AMARIT_UPDATE_INTERVAL` and `--update-interval` override it in that order. Exact-match versioning (section 3) is `amarit.ExactVersions()` in code |
+| `auto_update` | `true` makes the update loop the program's default, so its users opt out rather than in. Default `false`: the loop runs only when asked. Resolution, later layers winning: this field or `amarit.AutoUpdate()` in code, or `AMARIT_MANAGED=1` set by the amarit daemon; then `AMARIT_AUTO_UPDATE=1` or `0` in the environment; then `--auto-update` or `--no-auto-update` on the command line. A client never infers consent from anything else |
 | `service.*` | how `service install` runs the program: instance count, environment file, arguments, restart policy, exit codes that must not restart, readiness probe |
 | `release.targets` | the `os/arch` list the release tool builds and lists in the manifest |
 | `release.asset`, `release.url` | the asset file name and its download URL, as patterns with `{version}`, `{os}`, `{arch}` and (in `url`) `{asset}`. `url` is optional; its default `{asset}` names the file beside the manifest |

@@ -19,9 +19,12 @@ type ProjectConfig struct {
 	Restart string `json:"restart,omitempty"`
 	// Interval is how often --auto-update checks, a Go duration such as
 	// "5m" or "6h". Default one hour.
-	Interval string         `json:"interval,omitempty"`
-	Service  *ServiceConfig `json:"service,omitempty"`
-	Release  *ReleaseConfig `json:"release,omitempty"`
+	Interval string `json:"interval,omitempty"`
+	// AutoUpdate true makes the update loop this program's default; its
+	// users opt out with --no-auto-update or AMARIT_AUTO_UPDATE=0.
+	AutoUpdate bool           `json:"auto_update,omitempty"`
+	Service    *ServiceConfig `json:"service,omitempty"`
+	Release    *ReleaseConfig `json:"release,omitempty"`
 }
 
 // ServiceConfig is how the program wants to be kept alive.
@@ -95,10 +98,11 @@ func stampedConfig() (Config, error) {
 		return Config{}, err
 	}
 	cfg := Config{
-		Project:  c.Project,
-		Version:  strings.TrimPrefix(stampedVersion, "v"),
-		Releases: c.Releases,
-		Key:      c.Key,
+		Project:    c.Project,
+		Version:    strings.TrimPrefix(stampedVersion, "v"),
+		Releases:   c.Releases,
+		Key:        c.Key,
+		AutoUpdate: c.AutoUpdate,
 	}
 	if c.Restart == "overlap" {
 		cfg.Restart = Overlap

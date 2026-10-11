@@ -12,6 +12,7 @@ const goodConfig = `{
   "releases": "https://github.com/sudiptadeb/termulaa/releases/latest/download/releases.json",
   "restart": "overlap",
   "interval": "5m",
+  "auto_update": true,
   "service": { "instances": 1, "restart": "on-failure", "no_restart_exit": [4, 5, 7], "health": "http://127.0.0.1:17380/health" },
   "release": { "targets": ["darwin/arm64", "linux/amd64"] }
 }`
@@ -50,7 +51,7 @@ func TestStampedConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Project != "termulaa" || c.Version != "0.5.3" || c.Restart != Overlap || c.Interval != 5*time.Minute || !strings.HasSuffix(c.Releases, "releases.json") {
+	if c.Project != "termulaa" || c.Version != "0.5.3" || c.Restart != Overlap || c.Interval != 5*time.Minute || !c.AutoUpdate || !strings.HasSuffix(c.Releases, "releases.json") {
 		t.Fatalf("stamped config = %+v", c)
 	}
 	stampedProject = "not base64!"
@@ -73,5 +74,34 @@ func TestCheckIntervalPrecedence(t *testing.T) {
 	}
 	if got := checkInterval(Config{Interval: 5 * time.Minute}, 30*time.Second); got != 30*time.Second {
 		t.Fatalf("flag over env = %v", got)
+	}
+}
+
+func TestAutoUpdatePrecedence(t *testing.T) {
+	t.Setenv("AMARIT_AUTO_UPDATE", "")
+	t.Setenv("AMARIT_MANAGED", "")
+	if autoUpdate(Config{}, Options{}) {
+		t.Fatal("nothing said: must be off")
+	}
+	if !autoUpdate(Config{AutoUpdate: true}, Options{}) {
+		t.Fatal("the project's default must turn it on")
+	}
+	if !autoUpdate(Config{}, Options{AutoUpdate: true}) {
+		t.Fatal("--auto-update must turn it on")
+	}
+	t.Setenv("AMARIT_MANAGED", "1")
+	if !autoUpdate(Config{}, Options{}) {
+		t.Fatal("a unit under the daemon must be on")
+	}
+	t.Setenv("AMARIT_AUTO_UPDATE", "0")
+	if autoUpdate(Config{AutoUpdate: true}, Options{}) {
+		t.Fatal("AMARIT_AUTO_UPDATE=0 must beat the project's default and the daemon")
+	}
+	if !autoUpdate(Config{}, Options{AutoUpdate: true}) {
+		t.Fatal("--auto-update must beat the environment")
+	}
+	t.Setenv("AMARIT_AUTO_UPDATE", "1")
+	if autoUpdate(Config{AutoUpdate: true}, Options{NoAutoUpdate: true}) {
+		t.Fatal("--no-auto-update must beat everything")
 	}
 }

@@ -11,7 +11,8 @@ amarit is two small things that belong together:
 - **A library** a Go program embeds so it can update itself from a release
   manifest: verify, swap, restart in place with the same PID (or with zero
   downtime), and roll back by itself if the new version is not healthy.
-  Opt-in only; nothing updates without `--auto-update`.
+  Opt-in: nothing updates without `--auto-update`, unless the project made
+  auto-update its default, and then `--no-auto-update` turns it off.
 - **A daemon** you install once per machine that keeps any program running,
   with the best persistence the machine allows: LaunchDaemon, LaunchAgent,
   systemd, or detached. After `sudo amarit install --system` once, every
@@ -171,9 +172,16 @@ options in code (`amarit.Interval(5*time.Minute)`, `amarit.Key(k)`, ...),
 the environment, the command line. So `"interval": "5m"` in `amarit.json`
 is the program's own cadence, `AMARIT_UPDATE_INTERVAL=30m` in a unit's
 environment changes it for that install, and `--update-interval` wins for
-one run. A program running as an amarit unit has auto-update on (the
-operator said "keep this current" by putting it there);
-`AMARIT_AUTO_UPDATE=0` in the unit's environment turns it off.
+one run.
+
+Whether the loop runs at all follows the same layers. Auto-update is off
+unless somebody said otherwise, and nothing is detected: a project that
+wants its users to opt *out* instead of in puts `"auto_update": true` in
+`amarit.json` (or `amarit.AutoUpdate(true)` in code); a program running as
+an amarit unit has it on (the operator said "keep this current" by putting
+it there); `AMARIT_AUTO_UPDATE=1` or `=0` in the environment overrides
+both; `--auto-update` or `--no-auto-update` on the command line wins over
+everything.
 
 Several processes on one binary (a unit with `instances`, or units that
 share a program) take turns through a lock beside the binary, so the file is

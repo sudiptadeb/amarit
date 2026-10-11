@@ -8,7 +8,9 @@
 //
 // It reads the amarit.json stamped into the binary at build time, strips
 // its own flags from os.Args, and does nothing unless the program was run
-// with --auto-update, --update-check or the update subcommand.
+// with --auto-update, --update-check or the update subcommand, or the
+// project declared auto-update its default ("auto_update": true) and the
+// user did not say --no-auto-update.
 package amarit
 
 import (
@@ -35,6 +37,10 @@ type Config struct {
 	Exact    bool   // exact-match versions instead of semver order
 	Restart  RestartStrategy
 	Interval time.Duration // auto-update check cadence; zero means one hour
+	// AutoUpdate makes the loop the program's default, so its users opt out
+	// (--no-auto-update, AMARIT_AUTO_UPDATE=0) instead of in. False, the
+	// default, means nothing updates unless asked.
+	AutoUpdate bool
 
 	Handoff func() []*os.File         // descriptors to carry across the restart
 	Values  func() map[string]string  // small named values to carry across the restart
@@ -82,6 +88,11 @@ func RestartWith(s RestartStrategy) Option { return func(c *Config) { c.Restart 
 // --update-interval on the command line override both, in that order.
 func Interval(d time.Duration) Option { return func(c *Config) { c.Interval = d } }
 
+// AutoUpdate declares whether the update loop is this program's default,
+// overriding `auto_update` in amarit.json. A program that says true updates
+// unless its user says --no-auto-update or AMARIT_AUTO_UPDATE=0.
+func AutoUpdate(on bool) Option { return func(c *Config) { c.AutoUpdate = on } }
+
 // Handoff registers the descriptors the new process must inherit.
 func Handoff(fn func() []*os.File) Option { return func(c *Config) { c.Handoff = fn } }
 
@@ -99,6 +110,7 @@ func Healthy(fn func() bool) Option { return func(c *Config) { c.Healthy = fn } 
 // Options are what Start read from the command line.
 type Options struct {
 	AutoUpdate     bool
+	NoAutoUpdate   bool // --no-auto-update: the user opting out of a program's default
 	Channel        string
 	CheckOnce      bool
 	ManifestURL    string
@@ -142,11 +154,8 @@ func run(cfg Config) Options {
 		opts.Channel = "stable"
 	}
 	opts.Interval = checkInterval(cfg, opts.Interval)
-	// Under the amarit daemon the operator has already said "keep this
-	// current": auto-update is on unless the unit says AMARIT_AUTO_UPDATE=0.
-	if os.Getenv("AMARIT_MANAGED") == "1" && os.Getenv("AMARIT_AUTO_UPDATE") != "0" &&
-		!opts.AutoUpdate && !opts.CheckOnce && !opts.Update {
-		opts.AutoUpdate = true
+	if !opts.Update {
+		opts.AutoUpdate = autoUpdate(cfg, opts)
 	}
 	if !opts.AutoUpdate && !opts.CheckOnce && !opts.Update {
 		return opts
@@ -184,9 +193,32 @@ func run(cfg Config) Options {
 		u.once(context.Background())
 	}
 	if opts.AutoUpdate && ok {
+		log.Printf("amarit: auto-update on: %s %s, channel %s, every %s", cfg.Project, strings.TrimPrefix(cfg.Version, "v"), opts.Channel, opts.Interval)
 		go u.loop(context.Background(), opts.Interval)
 	}
 	return opts
+}
+
+// autoUpdate resolves whether the loop runs, the layers later in the list
+// winning: the program's own default (auto_update in amarit.json, or
+// amarit.AutoUpdate in code) or the amarit daemon's AMARIT_MANAGED=1, then
+// AMARIT_AUTO_UPDATE=1|0 in the environment, then --auto-update or
+// --no-auto-update on the command line. Nothing is detected: every "on"
+// here is a word somebody wrote down.
+func autoUpdate(cfg Config, opts Options) bool {
+	switch {
+	case opts.NoAutoUpdate:
+		return false
+	case opts.AutoUpdate:
+		return true
+	}
+	switch os.Getenv("AMARIT_AUTO_UPDATE") {
+	case "0":
+		return false
+	case "1":
+		return true
+	}
+	return cfg.AutoUpdate || os.Getenv("AMARIT_MANAGED") == "1"
 }
 
 // Apply updates to a version the program learned about through its own
@@ -252,6 +284,8 @@ func parseArgs(args []string) (Options, []string) {
 			if hasValue {
 				o.Channel = value
 			}
+		case "--no-auto-update":
+			o.NoAutoUpdate = true
 		case "--update-check":
 			o.CheckOnce = true
 		case "--update-url":

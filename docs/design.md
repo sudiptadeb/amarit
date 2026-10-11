@@ -49,8 +49,12 @@ replacement on unsigned manifests hosted there.
 
 ## Principles
 
-1. Opt-in, no magic. Nothing updates without `--auto-update`. No detection of
-   TTYs, tmux or package managers; an explicit flag is consent.
+1. Opt-in, no magic. Nothing updates unless somebody wrote it down: the user
+   with `--auto-update`, the operator by running the program under the amarit
+   daemon, or the project by declaring `"auto_update": true` in its
+   amarit.json, which turns the question around for its users
+   (`--no-auto-update` opts out). No detection of TTYs, tmux or package
+   managers; a written word is consent, a guess never is.
 2. Works unsigned. A manifest over TLS with hashes is a complete configuration.
 3. One engine for every run mode: exec in place, same PID, descriptors carried
    across. Windows gets a helper process.

@@ -114,6 +114,10 @@ func TestParseArgs(t *testing.T) {
 	if o.UpdateCheck || len(rest) != 2 {
 		t.Fatalf("--check without update belongs to the program: %+v %v", o, rest)
 	}
+	o, rest = parseArgs([]string{"--no-auto-update", "-rc"})
+	if !o.NoAutoUpdate || len(rest) != 1 || rest[0] != "-rc" {
+		t.Fatalf("--no-auto-update: %+v rest %v", o, rest)
+	}
 	o, rest = parseArgs([]string{"-rc", "service"})
 	if o.Service != "" || len(rest) != 2 {
 		t.Fatalf("a later word 'service' belongs to the program: %q %v", o.Service, rest)
