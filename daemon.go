@@ -37,6 +37,51 @@ type Unit struct {
 	StopTimeout string `json:"stop_timeout,omitempty"`
 	// Limits are resource limits for the process, by name: {"nofile": 65536}.
 	Limits map[string]uint64 `json:"limits,omitempty"`
+	// Instances runs that many copies, named <name>@1 .. <name>@N, each with
+	// AMARIT_INSTANCE=<i> and {instance} expanded in args and env values.
+	Instances int `json:"instances,omitempty"`
+}
+
+// InstanceNames lists the names the daemon runs this unit under: the unit's
+// own name, or <name>@1 .. <name>@N when it has instances.
+func (u Unit) InstanceNames() []string {
+	if u.Instances <= 0 {
+		return []string{u.Name}
+	}
+	names := make([]string, 0, u.Instances)
+	for i := 1; i <= u.Instances; i++ {
+		names = append(names, fmt.Sprintf("%s@%d", u.Name, i))
+	}
+	return names
+}
+
+// instance is the unit as its i-th copy; 0 is the unit itself.
+func (u Unit) instance(i int) Unit {
+	if i == 0 {
+		return u
+	}
+	n := strconv.Itoa(i)
+	c := u
+	c.Name = u.Name + "@" + n
+	c.Args = make([]string, len(u.Args))
+	for j, a := range u.Args {
+		c.Args[j] = strings.ReplaceAll(a, "{instance}", n)
+	}
+	c.Env = make(map[string]string, len(u.Env))
+	for k, v := range u.Env {
+		c.Env[k] = strings.ReplaceAll(v, "{instance}", n)
+	}
+	return c
+}
+
+// splitInstance takes "worker@3" apart; a plain name has index 0.
+func splitInstance(name string) (string, int) {
+	if base, idx, ok := strings.Cut(name, "@"); ok {
+		if i, err := strconv.Atoi(idx); err == nil {
+			return base, i
+		}
+	}
+	return name, 0
 }
 
 // knownLimits are the names Limits accepts.
@@ -102,8 +147,11 @@ func (b Base) SaveUnit(u Unit) error {
 	if u.Name == "" || u.Binary == "" {
 		return errors.New("unit needs a name and a binary")
 	}
-	if strings.ContainsAny(u.Name, "/\\ ") {
-		return fmt.Errorf("unit name %q: no slashes or spaces", u.Name)
+	if strings.ContainsAny(u.Name, "/\\ @") {
+		return fmt.Errorf("unit name %q: no slashes, spaces or @", u.Name)
+	}
+	if u.Instances < 0 {
+		return fmt.Errorf("unit %s: instances must not be negative", u.Name)
 	}
 	if u.StopTimeout != "" {
 		if d, err := time.ParseDuration(u.StopTimeout); err != nil || d <= 0 {
@@ -131,7 +179,58 @@ func (b Base) SaveUnit(u Unit) error {
 
 // RemoveUnit deletes a unit file; the daemon stops the process.
 func (b Base) RemoveUnit(name string) error {
-	return os.Remove(filepath.Join(b.units(), name+".json"))
+	if err := os.Remove(filepath.Join(b.units(), name+".json")); err != nil {
+		return err
+	}
+	stopped, _ := filepath.Glob(filepath.Join(b.run(), name+"@*.stopped"))
+	for _, p := range stopped {
+		_ = os.Remove(p)
+	}
+	return nil
+}
+
+// Enable starts or stops a unit with all its instances, or one instance
+// given as <name>@<i>. A unit is stopped in its file; an instance by a
+// marker in run/, so the daemon leaves it down until told otherwise.
+func (b Base) Enable(name string, on bool) error {
+	units, err := b.Units()
+	if err != nil {
+		return err
+	}
+	unitName, idx := splitInstance(name)
+	for _, u := range units {
+		switch {
+		case u.Name == name:
+			u.Enabled = &on
+			if on {
+				for _, n := range u.InstanceNames() {
+					_ = os.Remove(b.stopMarker(n))
+				}
+			}
+			return b.SaveUnit(u)
+		case u.Name == unitName && idx >= 1 && idx <= u.Instances:
+			if on {
+				err := os.Remove(b.stopMarker(name))
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return err
+			}
+			if err := b.ensure(); err != nil {
+				return err
+			}
+			return os.WriteFile(b.stopMarker(name), nil, 0o644)
+		}
+	}
+	return fmt.Errorf("no unit named %s", name)
+}
+
+func (b Base) stopMarker(name string) string { return filepath.Join(b.run(), name+".stopped") }
+
+// Stopped reports whether one instance was stopped by name.
+func (b Base) Stopped(name string) bool {
+	_, err := os.Stat(b.stopMarker(name))
+	return err == nil
 }
 
 // Units lists the unit files, sorted by name.
@@ -243,6 +342,7 @@ type child struct {
 	lastExit string
 	done     chan error
 	log      *os.File
+	instance int  // 1-based for a unit with instances; 0 otherwise
 	parked   bool // exited and its policy says not to restart; waits for the unit file to change
 }
 
@@ -291,10 +391,21 @@ func (d *Daemon) adopt() {
 	statuses, _ := d.base.Statuses()
 	for name, s := range statuses {
 		if s.PID != 0 && processAlive(s.PID) {
-			d.children[name] = &child{pid: s.PID, started: s.Since, restarts: s.Restarts, done: watchPID(s.PID)}
+			_, i := splitInstance(name)
+			d.children[name] = &child{unit: Unit{Name: name}, instance: i, pid: s.PID, started: s.Since, restarts: s.Restarts, done: watchPID(s.PID)}
 			log.Printf("amarit: adopted %s (pid %d)", name, s.PID)
 		}
 	}
+}
+
+// instanceLess orders unit names with worker@2 before worker@10.
+func instanceLess(a, b string) bool {
+	an, ai := splitInstance(a)
+	bn, bi := splitInstance(b)
+	if an != bn {
+		return an < bn
+	}
+	return ai < bi
 }
 
 // watchPID polls a process amarit did not spawn, since it cannot wait() on it.
@@ -317,11 +428,16 @@ func (d *Daemon) reconcile() {
 	}
 	want := map[string]Unit{}
 	for _, u := range units {
-		if u.enabled() {
-			want[u.Name] = u
+		if !u.enabled() {
+			continue
+		}
+		for _, name := range u.InstanceNames() {
+			if _, i := splitInstance(name); !d.base.Stopped(name) {
+				want[name] = u.instance(i)
+			}
 		}
 	}
-	// Stop what is no longer wanted.
+	// Stop what is no longer wanted, the highest instance numbers first.
 	var gone []*child
 	for name, c := range d.children {
 		if _, ok := want[name]; !ok {
@@ -330,12 +446,14 @@ func (d *Daemon) reconcile() {
 			_ = os.Remove(filepath.Join(d.base.run(), name+".json"))
 		}
 	}
+	sort.Slice(gone, func(i, j int) bool { return instanceLess(gone[j].unit.Name, gone[i].unit.Name) })
 	d.stopAll(gone)
 	// Start, restart, or notice exits.
 	for name, u := range want {
 		c, ok := d.children[name]
 		if !ok {
-			c = &child{unit: u, backoff: time.Second}
+			_, i := splitInstance(name)
+			c = &child{unit: u, instance: i, backoff: time.Second}
 			d.children[name] = c
 			d.start(c)
 			continue
@@ -386,6 +504,9 @@ func (d *Daemon) start(c *child) {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.Env = append(cmd.Env, "AMARIT_MANAGED=1", "AMARIT_UNIT="+u.Name)
+	if c.instance > 0 {
+		cmd.Env = append(cmd.Env, "AMARIT_INSTANCE="+strconv.Itoa(c.instance))
+	}
 	if len(u.Limits) > 0 {
 		var limits []string
 		for _, name := range slices.Sorted(maps.Keys(u.Limits)) {

@@ -212,3 +212,61 @@ func TestNeverPolicyRunsOnce(t *testing.T) {
 		t.Fatalf("a never unit ran %d times", strings.Count(string(b), "run"))
 	}
 }
+
+func TestInstancesRunNamedCopies(t *testing.T) {
+	dir := t.TempDir()
+	base := Base(filepath.Join(dir, "base"))
+	worker := script(t, dir, "worker", `echo "$AMARIT_UNIT $AMARIT_INSTANCE $WORKER_ID $1" > `+dir+`/$1; exec sleep 60`)
+	u := Unit{Name: "worker", Binary: worker, Args: []string{"w{instance}"}, Env: map[string]string{"WORKER_ID": "id-{instance}"}, Instances: 2}
+	if err := base.SaveUnit(u); err != nil {
+		t.Fatal(err)
+	}
+	d := NewDaemon(base)
+	d.tick = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go d.Run(ctx)
+
+	var pid1, pid2 int
+	var seen string
+	waitFor(t, "both instances to run and report", func() bool {
+		s, _ := base.Statuses()
+		pid1, pid2 = s["worker@1"].PID, s["worker@2"].PID
+		b, _ := os.ReadFile(filepath.Join(dir, "w2"))
+		seen = strings.TrimSpace(string(b))
+		return pid1 != 0 && pid2 != 0 && seen != ""
+	})
+	if seen != "worker@2 2 id-2 w2" {
+		t.Fatalf("instance 2 saw %q", seen)
+	}
+
+	// Fewer instances: the highest number goes, the rest keep their pid.
+	u.Instances = 1
+	if err := base.SaveUnit(u); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "worker@2 to be stopped", func() bool {
+		s, _ := base.Statuses()
+		_, still := s["worker@2"]
+		return !still && !processAlive(pid2)
+	})
+	if s, _ := base.Statuses(); s["worker@1"].PID != pid1 {
+		t.Fatalf("worker@1 was restarted (pid %d -> %d)", pid1, s["worker@1"].PID)
+	}
+
+	// One instance can be stopped and started on its own.
+	if err := base.Enable("worker@1", false); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "worker@1 to be stopped", func() bool { return !processAlive(pid1) })
+	if err := base.Enable("worker@1", true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "worker@1 to run again", func() bool {
+		s, _ := base.Statuses()
+		return s["worker@1"].State == "running" && s["worker@1"].PID != pid1
+	})
+	if err := base.Enable("worker@7", false); err == nil {
+		t.Fatal("an instance that does not exist must be refused")
+	}
+}

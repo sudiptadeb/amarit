@@ -303,8 +303,9 @@ func run(args []string) error {
 	restart := fs.String("restart", "always", "always, on-failure or never")
 	dir := fs.String("dir", "", "working directory")
 	envFile := fs.String("env-file", "", "file of KEY=VALUE lines sourced at start")
+	instances := fs.Int("instances", 0, "run N copies, named <name>@1..N")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: amarit run [-name N] [-restart always|on-failure|never] [-dir D] [-env-file F] <binary> [args...]")
+		fmt.Fprintln(os.Stderr, "usage: amarit run [-name N] [-instances N] [-restart always|on-failure|never] [-dir D] [-env-file F] <binary> [args...]")
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -328,7 +329,7 @@ func run(args []string) error {
 		}
 	}
 	base := amarit.DefaultBase()
-	u := amarit.Unit{Name: *name, Binary: bin, Args: rest, Restart: *restart, Dir: *dir, EnvFile: *envFile}
+	u := amarit.Unit{Name: *name, Binary: bin, Args: rest, Restart: *restart, Dir: *dir, EnvFile: *envFile, Instances: *instances}
 	if err := base.SaveUnit(u); err != nil {
 		return err
 	}
@@ -340,7 +341,12 @@ func run(args []string) error {
 			return err
 		}
 	}
-	return waitRunning(base, u.Name)
+	for _, n := range u.InstanceNames() {
+		if err := waitRunning(base, n); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func waitRunning(base amarit.Base, name string) error {
@@ -374,40 +380,51 @@ func ls(args []string) error {
 	}
 	fmt.Fprintln(w, "UNIT\tSTATE\tPID\tRESTARTS\tSINCE\tCOMMAND")
 	for _, u := range units {
-		s := statuses[u.Name]
-		state := s.State
-		if state == "" {
-			state = "pending"
+		for i, name := range u.InstanceNames() {
+			s := statuses[name]
+			state := s.State
+			if state == "" {
+				state = "pending"
+			}
+			if (u.Enabled != nil && !*u.Enabled) || base.Stopped(name) {
+				state = "stopped"
+			}
+			since := ""
+			if s.PID != 0 {
+				since = time.Since(s.Since).Round(time.Second).String()
+			}
+			pid := ""
+			if s.PID != 0 {
+				pid = fmt.Sprint(s.PID)
+			}
+			args := strings.Join(u.Args, " ")
+			if u.Instances > 0 {
+				args = strings.ReplaceAll(args, "{instance}", fmt.Sprint(i+1))
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s %s\n", name, state, pid, s.Restarts, since, filepath.Base(u.Binary), args)
 		}
-		if u.Enabled != nil && !*u.Enabled {
-			state = "stopped"
-		}
-		since := ""
-		if s.PID != 0 {
-			since = time.Since(s.Since).Round(time.Second).String()
-		}
-		pid := ""
-		if s.PID != 0 {
-			pid = fmt.Sprint(s.PID)
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s %s\n", u.Name, state, pid, s.Restarts, since, filepath.Base(u.Binary), strings.Join(u.Args, " "))
 	}
 	return w.Flush()
 }
 
-func setEnabled(name string, on bool) error {
-	base := amarit.DefaultBase()
+// instanceNames expands a unit name to its instances; <name>@<i> stays as
+// it is. It errors when nothing is called that.
+func instanceNames(base amarit.Base, name string) ([]string, error) {
 	units, err := base.Units()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, u := range units {
 		if u.Name == name {
-			u.Enabled = &on
-			return base.SaveUnit(u)
+			return u.InstanceNames(), nil
+		}
+		for _, n := range u.InstanceNames() {
+			if n == name {
+				return []string{name}, nil
+			}
 		}
 	}
-	return fmt.Errorf("no unit named %s", name)
+	return nil, fmt.Errorf("no unit named %s", name)
 }
 
 func logs(args []string) error {
@@ -417,13 +434,21 @@ func logs(args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: amarit logs [-f] <unit>")
+		return errors.New("usage: amarit logs [-f] <unit>[@<i>]")
 	}
-	path := filepath.Join(string(amarit.DefaultBase()), "logs", fs.Arg(0)+".log")
-	tail := exec.Command("tail", "-n", "50", path)
+	base := amarit.DefaultBase()
+	names, err := instanceNames(base, fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	tailArgs := []string{"-n", "50"}
 	if *follow {
-		tail = exec.Command("tail", "-n", "50", "-f", path)
+		tailArgs = append(tailArgs, "-f")
 	}
+	for _, n := range names {
+		tailArgs = append(tailArgs, filepath.Join(string(base), "logs", n+".log"))
+	}
+	tail := exec.Command("tail", tailArgs...)
 	tail.Stdout, tail.Stderr = os.Stdout, os.Stderr
 	return tail.Run()
 }

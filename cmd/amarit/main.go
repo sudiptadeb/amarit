@@ -45,9 +45,9 @@ func main() {
 	case "ls", "status":
 		err = ls(os.Args[2:])
 	case "stop":
-		err = named(os.Args[2:], func(n string) error { return setEnabled(n, false) })
+		err = named(os.Args[2:], func(n string) error { return amarit.DefaultBase().Enable(n, false) })
 	case "start":
-		err = named(os.Args[2:], func(n string) error { return setEnabled(n, true) })
+		err = named(os.Args[2:], func(n string) error { return amarit.DefaultBase().Enable(n, true) })
 	case "rm":
 		err = named(os.Args[2:], amarit.DefaultBase().RemoveUnit)
 	case "logs":
@@ -89,11 +89,17 @@ func usage() {
 keep it alive (this machine):
   amarit install [--system]        keep the amarit daemon itself running; --system needs sudo once,
                                    after which 'amarit run' never does
-  amarit run <binary> [args...]    keep a program running (unit named after the binary)
+  amarit run [-name N] [-instances N] <binary> [args...]
+                                   keep a program running (unit named after the binary);
+                                   -instances N runs N copies named <name>@1..N
   amarit ls                        every unit, its state, pid, restarts
-  amarit logs [-f] <unit>          a unit's output
-  amarit stop|start|rm <unit>
+  amarit logs [-f] <unit>[@<i>]    a unit's output, or one instance's
+  amarit stop|start <unit>[@<i>]   stop or start a unit, or one instance of it
+  amarit rm <unit>
   amarit uninstall
+
+A unit is a JSON file in ~/.amarit/units/; see README.md for its fields
+(env, env_file, dir, restart, no_restart_exit, stop_timeout, limits, instances).
 
 keep it current (release side):
   amarit stamp   [-config amarit.json] -version X                print the -ldflags that stamp a build
