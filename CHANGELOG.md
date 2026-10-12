@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.5.3
+
+- **A unit file named like an instance is ignored, loudly.** `amarit run`
+  never accepted a name with `@`, `/`, `\` or a space, but a hand-written
+  `web@3.json` in the units directory was loaded and then read everywhere
+  as instance 3 of `web`, sharing its status, log and stop marker. The
+  daemon now skips such a file and logs a `WARNING: IGNORING unit file`
+  line naming it, once per process.
+- README: who runs as whom on each platform.
+
 ## v0.5.2
 
 A `go install` build configures itself: one resolution of the
