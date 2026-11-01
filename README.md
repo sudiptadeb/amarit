@@ -367,7 +367,7 @@ Install. Platform APIs only, minSdk 26.
 
 ```kotlin
 // settings.gradle.kts: maven("https://jitpack.io") among the repositories
-// build.gradle.kts:    implementation("com.github.sudiptadeb.amarit:amarit:v0.6.0")
+// build.gradle.kts:    implementation("com.github.sudiptadeb:amarit:v0.6.0")
 // AndroidManifest.xml: <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
 override fun onCreate(savedInstanceState: Bundle?) {

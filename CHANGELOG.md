@@ -11,7 +11,7 @@ An Android app is the sixth consumer: the same manifest, read from Kotlin.
   PackageInstaller; the user taps Install. Platform APIs only, minSdk 26.
   A notification on its own channel and an in-app dialog are the default
   UI; `Updater` is the API for an app that wants its own. Served by JitPack
-  as `com.github.sudiptadeb.amarit:amarit`, the AAR attached to releases.
+  as `com.github.sudiptadeb:amarit`, the AAR attached to releases.
 - **Spec: Android versions.** A higher `version_code` is an update, a lower
   one never, an equal one with a different version string is a rebuild,
   which carries a rolling channel on one code. `version_code` is required

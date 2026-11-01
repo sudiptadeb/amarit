@@ -46,7 +46,7 @@ dependencies {
 publishing {
     publications {
         register<MavenPublication>("release") {
-            groupId = "com.github.sudiptadeb.amarit"
+            groupId = "com.github.sudiptadeb" // JitPack's convention: the module name is not in the group
             artifactId = "amarit"
             version = amaritVersion
             afterEvaluate { from(components["release"]) }

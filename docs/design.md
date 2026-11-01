@@ -345,8 +345,8 @@ Decisions, and what was not taken:
   check between the two implementations. A separate repository would drift
   from the spec. JitPack builds the module from a tag or a commit
   (`jitpack.yml` points it at `android/`) as
-  `com.github.sudiptadeb.amarit:amarit`; the AAR is also attached to each
-  release. One version tag for both halves.
+  `com.github.sudiptadeb:amarit`, its convention for a repository with one
+  published module; the AAR is also attached to each release. One version tag for both halves.
 - *Platform APIs only.* HttpsURLConnection, org.json, MessageDigest,
   PackageInstaller, JobScheduler, Notification. No AndroidX, no
   coroutines: rule 5, and the first consumer has neither.
