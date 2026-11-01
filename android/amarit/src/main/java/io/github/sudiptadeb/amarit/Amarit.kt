@@ -139,20 +139,27 @@ object Amarit {
 
         val u = Updater(app, cfg)
         current = u
-        persist(u.prefs, cfg)
-        u.reconcile()
-        if (cfg.project.isEmpty() || cfg.releases.isEmpty()) {
-            Log.i(TAG, "no project or releases URL in this build; updates are off")
-            return u
-        }
-        if (cfg.key != null) Log.i(TAG, "a key is configured but signatures are not verified yet; hash tier only")
-        if (u.autoUpdate) {
-            u.schedule()
-            if (u.due()) {
-                if (context is Activity) u.promptIfAvailable(context) else u.notifyIfAvailable()
+        // From here on nothing may take the app down with it: an updater is
+        // never the reason a program cannot start, so a surprise is logged
+        // and the app opens without it.
+        try {
+            persist(u.prefs, cfg)
+            u.reconcile()
+            if (cfg.project.isEmpty() || cfg.releases.isEmpty()) {
+                Log.i(TAG, "no project or releases URL in this build; updates are off")
+                return u
             }
-        } else {
-            u.cancelSchedule()
+            if (cfg.key != null) Log.i(TAG, "a key is configured but signatures are not verified yet; hash tier only")
+            if (u.autoUpdate) {
+                u.schedule()
+                if (u.due()) {
+                    if (context is Activity) u.promptIfAvailable(context) else u.notifyIfAvailable()
+                }
+            } else {
+                u.cancelSchedule()
+            }
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "start: $e; updates are off until the next start", e)
         }
         return u
     }

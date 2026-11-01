@@ -229,22 +229,38 @@ class Updater internal constructor(private val context: Context, val config: Ama
         return info.requestedPermissions?.contains("android.permission.REQUEST_INSTALL_PACKAGES") == true
     }
 
-    /** Ensures the periodic check is scheduled with the configured interval; leaves an existing one's clock alone. */
+    /**
+     * Ensures the periodic check is scheduled with the configured interval;
+     * leaves an existing one's clock alone. The updater is never the reason
+     * an app cannot open: a scheduler that refuses is logged, and the check
+     * on open still runs.
+     */
     internal fun schedule() {
-        val js = context.getSystemService(JobScheduler::class.java) ?: return
-        val period = maxOf(config.intervalMs, JobInfo.getMinPeriodMillis())
-        val pending = js.getPendingJob(JOB_ID)
-        if (pending != null && pending.intervalMillis == period) return
-        val job = JobInfo.Builder(JOB_ID, ComponentName(context, CheckJob::class.java))
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPeriodic(period)
-            .build()
-        js.schedule(job)
-        Log.i(Amarit.TAG, "auto-update on: ${config.project} ${installed.versionName}, channel $channel, every ${period / 60000} min")
+        try {
+            val js = context.getSystemService(JobScheduler::class.java) ?: return
+            val period = maxOf(config.intervalMs, JobInfo.getMinPeriodMillis())
+            val pending = js.getPendingJob(JOB_ID)
+            if (pending != null && pending.intervalMillis == period) return
+            val job = JobInfo.Builder(JOB_ID, ComponentName(context, CheckJob::class.java))
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setPeriodic(period)
+                .build()
+            if (js.schedule(job) != JobScheduler.RESULT_SUCCESS) {
+                Log.w(Amarit.TAG, "the scheduler refused the periodic check; checking on open only")
+                return
+            }
+            Log.i(Amarit.TAG, "auto-update on: ${config.project} ${installed.versionName}, channel $channel, every ${period / 60000} min")
+        } catch (e: RuntimeException) {
+            Log.w(Amarit.TAG, "cannot schedule the periodic check: $e; checking on open only")
+        }
     }
 
     internal fun cancelSchedule() {
-        context.getSystemService(JobScheduler::class.java)?.cancel(JOB_ID)
+        try {
+            context.getSystemService(JobScheduler::class.java)?.cancel(JOB_ID)
+        } catch (e: RuntimeException) {
+            Log.w(Amarit.TAG, "cannot cancel the periodic check: $e")
+        }
     }
 
     private fun open(url: String): HttpURLConnection {
