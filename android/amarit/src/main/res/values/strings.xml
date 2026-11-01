@@ -11,7 +11,7 @@
     <string name="amarit_skip">Skip this version</string>
     <string name="amarit_downloading">Downloading %1$s</string>
     <string name="amarit_allow_title">Allow updates</string>
-    <string name="amarit_allow_text">Android asks you to allow %1$s to install updates. Tap Continue and turn the switch on, then come back.</string>
+    <string name="amarit_allow_text">Android asks you to allow %1$s to install updates. Tap Continue, turn on "Allow from this source", then come back.</string>
     <string name="amarit_continue">Continue</string>
     <string name="amarit_failed">Update failed</string>
     <string name="amarit_incompatible">The update is signed with a different key than the installed app. Uninstall the app and install it again.</string>
