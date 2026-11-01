@@ -327,6 +327,59 @@ next line lands at the start of the emptied file. A line written during the
 copy can be lost, which is the price of not asking programs to reopen their
 logs. The check is one `stat` per running unit per poll.
 
+## Android consumer
+
+Consumer 6 is an app, not a program amarit can exec. The Kotlin library in
+`android/` is a read-only consumer of the manifest: it checks, decides,
+downloads and verifies, and hands the APK to PackageInstaller, where the
+user taps Install. The platform owns the swap, so there is no `.prev`, no
+health rollback and no exec; everything before the hand-off fails closed
+and leaves the installed app alone, as the Go engine does before its swap.
+
+Decisions, and what was not taken:
+
+- *Same repository.* `android/` is its own Gradle build with one library
+  module; Go ignores a directory without `.go` files, so `go install` and
+  CI are untouched, and the Kotlin tests parse the same
+  `testdata/manifest.json` the Go tests do, which is the only conformance
+  check between the two implementations. A separate repository would drift
+  from the spec. JitPack builds the module from a tag or a commit
+  (`jitpack.yml` points it at `android/`) as
+  `com.github.sudiptadeb.amarit:amarit`; the AAR is also attached to each
+  release. One version tag for both halves.
+- *Platform APIs only.* HttpsURLConnection, org.json, MessageDigest,
+  PackageInstaller, JobScheduler, Notification. No AndroidX, no
+  coroutines: rule 5, and the first consumer has neither.
+- *The manifest, not the GitHub Releases API.* GitHub cannot carry
+  `versionCode`, gives a rolling build no identity without parsing tags or
+  asset names, and reading a hosting convention is the guess the library
+  refuses. CI writes `releases.json` with `amarit release` and attaches it
+  beside the APK.
+- *versionCode decides.* Spec section 3, "Android": higher is an update,
+  lower never, equal with a different string is a rebuild. The rolling
+  channel names builds `0.2.1+g<sha7>` on one code. `amarit release` takes
+  the code from CI with `-version-code` rather than parsing the APK's
+  binary manifest for one integer the build already knows.
+- *One manifest, two channels.* On GitHub it lives on the rolling
+  pre-release by tag path (`releases/download/latest/releases.json`),
+  because `releases/latest/download/` resolves to the newest non-prerelease.
+  Each CI job downloads it, merges its channel, re-uploads; a concurrency
+  group serializes the two jobs. `-asset` and `-url` name a channel's asset
+  for one run (the rolling asset has a fixed name), `-prune` forgets the
+  builds no channel points at.
+- *Consent.* The same layers as the Go side, in Android's terms:
+  `assets/amarit.json` is the stamp (the build copies the repository file
+  in; the library reads nothing it was not given), options in code lay
+  over it, and the user's own switch and channel, stored by the library,
+  win over both, as the environment and the command line do for a
+  program. Auto-update on means a periodic check and a prompt; off means
+  nothing runs until the app's own button asks. `REQUEST_INSTALL_PACKAGES`
+  is declared by the app, never merged in from the library.
+- *Not in v1.* Android 12 can skip the confirmation for an app that is its
+  own installer of record (`USER_ACTION_NOT_REQUIRED`); for a VPN app that
+  restarts the service under the user, so it stays a later opt-in. The
+  signed tier follows the Go side.
+
 ## Root units (proposal, not built)
 
 Some jobs have to run as root: a one-shot `sysctl` at boot (raising the

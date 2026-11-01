@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="amarit_channel_name">App updates</string>
+    <string name="amarit_available">%1$s %2$s is available</string>
+    <string name="amarit_tap">Tap to download and install</string>
+    <string name="amarit_size">%1$s MB to download.</string>
+    <string name="amarit_critical">The publisher marked this update as important.</string>
+    <string name="amarit_unsupported">The version you run is no longer supported.</string>
+    <string name="amarit_install">Install</string>
+    <string name="amarit_later">Later</string>
+    <string name="amarit_skip">Skip this version</string>
+    <string name="amarit_downloading">Downloading %1$s</string>
+    <string name="amarit_allow_title">Allow updates</string>
+    <string name="amarit_allow_text">Android asks you to allow %1$s to install updates. Tap Continue and turn the switch on, then come back.</string>
+    <string name="amarit_continue">Continue</string>
+    <string name="amarit_failed">Update failed</string>
+    <string name="amarit_incompatible">The update is signed with a different key than the installed app. Uninstall the app and install it again.</string>
+    <string name="amarit_up_to_date">%1$s %2$s is up to date</string>
+</resources>

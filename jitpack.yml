@@ -1,0 +1,6 @@
+# The Android library lives in android/; JitPack builds it from the tag or
+# commit it was asked for and serves it as com.github.sudiptadeb.amarit:amarit.
+jdk:
+  - openjdk17
+install:
+  - cd android && ./gradlew :amarit:publishToMavenLocal -PamaritVersion=$VERSION --no-daemon

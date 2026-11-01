@@ -1,7 +1,7 @@
 #!/bin/sh
 # Cut a release of amarit itself: build every target with the version and
-# amarit.json stamped in, write SHA256SUMS and releases.json, and publish
-# them as a GitHub release. The manifest carries the earlier releases over
+# amarit.json stamped in, build the Android library's AAR, write SHA256SUMS
+# and releases.json, and publish them as a GitHub release. The manifest carries the earlier releases over
 # from the one published last, so the channel never forgets a version.
 #
 #   ./release.sh v0.5.0
@@ -18,6 +18,8 @@ for target in $(sed -n 's/.*"targets": \[\(.*\)\].*/\1/p' amarit.json | tr -d '"
 		-ldflags "$STAMP" \
 		-o "$DIST/amarit-${target%/*}-${target#*/}" ./cmd/amarit
 done
+(cd android && ./gradlew -q :amarit:assembleRelease -PamaritVersion="$VERSION" --no-daemon)
+cp android/amarit/build/outputs/aar/amarit-release.aar "$DIST/amarit-android.aar"
 (cd "$DIST" && shasum -a 256 amarit-* > SHA256SUMS)
 gh release download --pattern releases.json -O "$DIST/releases.json" 2>/dev/null || true
 go run ./cmd/amarit release -version "$VERSION" -dist "$DIST" -out "$DIST/releases.json"

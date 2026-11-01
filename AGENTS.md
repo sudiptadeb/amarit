@@ -26,6 +26,7 @@ follows it, not the other way round.
    `.prev` until the new version has written its healthy marker.
 5. Standard library only unless a dependency is justified in docs/design.md.
 6. `gofmt -w`, `go vet ./...`, `go test ./...` before every commit. CI runs
-   the same on Linux and macOS.
+   the same on Linux and macOS. A change under `android/` also runs
+   `cd android && ./gradlew testReleaseUnitTest assembleRelease`.
 7. Comments explain why, not what. One short line, only when it is not obvious.
 8. Commits: short imperative subject, body says why. No force-pushes to main.

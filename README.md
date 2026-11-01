@@ -22,8 +22,8 @@ The two never overlap: the library updates, the daemon keeps alive. A
 program can use either without the other.
 
 > Status: early. The hash tier of updates, descriptor and value handoff
-> across the restart, and the daemon work end to end; signing, the
-> enterprise tier and Windows follow the roadmap.
+> across the restart, the daemon, and the Android consumer work end to
+> end; signing, the enterprise tier and Windows follow the roadmap.
 > [docs/design.md](docs/design.md) is the proposal and the reasoning,
 > [docs/spec.md](docs/spec.md) the manifest format.
 
@@ -357,6 +357,49 @@ from `<bin>.amarit/prev`, restarts the units, keeps the rejected binary as
 `<bin>.amarit/bad`, and says so. A unit named outright whose program was not
 built with amarit is an error; with no names such units are skipped and
 listed.
+
+## Keep an Android app current
+
+The same manifest, consumed from Kotlin: the library in [`android/`](android/)
+checks it, compares against the installed `versionCode`, downloads and
+verifies the APK, and hands it to the package installer, where the user taps
+Install. Platform APIs only, minSdk 26.
+
+```kotlin
+// settings.gradle.kts: maven("https://jitpack.io") among the repositories
+// build.gradle.kts:    implementation("com.github.sudiptadeb.amarit:amarit:v0.6.0")
+// AndroidManifest.xml: <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    Amarit.start(this)          // reads assets/amarit.json; inert, and says so, without one
+}
+```
+
+`assets/amarit.json` is the repository's `amarit.json`, copied in by the
+build (a six-line Gradle task; see the etchosts project for one). With
+`"auto_update": true` in it the app checks on a schedule and prompts; the
+user's switch, `Amarit.current?.autoUpdate = false`, turns that off, and
+`channel = "latest"` follows another channel. Without it, nothing runs
+until the app's own button calls `checkNow(activity)`.
+
+CI publishes the APK and the manifest together. With the amarit CLI
+installed on the runner (`go install github.com/sudiptadeb/amarit/cmd/amarit@latest`):
+
+```sh
+amarit release -version 0.2.1 -version-code 3 -dist dist -out dist/releases.json
+amarit release -version "0.2.1+g${sha::7}" -version-code 3 -channel latest \
+    -asset app-latest.apk -url "https://github.com/o/r/releases/download/latest/{asset}" \
+    -dist dist -out dist/releases.json -prune
+```
+
+The `android` target has no arch and carries the APK's `versionCode`; an
+equal code with a new version string is a rebuild, which is how a rolling
+channel updates phones on every push without bumping the code (spec,
+section 3). On GitHub the manifest lives on the rolling pre-release
+(`releases/download/latest/releases.json`), since `releases/latest/download/`
+skips pre-releases. One signing key for every channel, or the platform
+refuses the update.
 
 ## How an update runs
 

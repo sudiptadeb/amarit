@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.6.0
+
+An Android app is the sixth consumer: the same manifest, read from Kotlin.
+
+- **`android/`: the Android library.** `Amarit.start(this)` reads the
+  project's `amarit.json` from the APK's assets, checks the manifest on a
+  schedule (JobScheduler) or on demand, compares against the installed
+  `versionCode`, downloads and verifies the APK, and hands it to
+  PackageInstaller; the user taps Install. Platform APIs only, minSdk 26.
+  A notification on its own channel and an in-app dialog are the default
+  UI; `Updater` is the API for an app that wants its own. Served by JitPack
+  as `com.github.sudiptadeb.amarit:amarit`, the AAR attached to releases.
+- **Spec: Android versions.** A higher `version_code` is an update, a lower
+  one never, an equal one with a different version string is a rebuild,
+  which carries a rolling channel on one code. `version_code` is required
+  on the `android` target.
+- **`amarit release` for an APK.** The `android` target, `-version-code N`,
+  per-run `-asset` and `-url` patterns, and `-prune` to forget releases no
+  channel points at.
+- The Go and Kotlin tests parse one fixture, `testdata/manifest.json`.
+
 ## v0.5.3
 
 - **A unit file named like an instance is ignored, loudly.** `amarit run`
