@@ -1,0 +1,17 @@
+{
+  "spec": 1,
+  "project": "termulaa",
+  "published": "2026-10-09T10:00:00Z",
+  "expires": "2026-11-09T10:00:00Z",
+  "min_version": "0.5.0",
+  "channels": { "stable": "0.5.2", "canary": "0.5.3" },
+  "releases": {
+    "0.5.2": { "assets": {
+      "darwin/arm64": { "url": "https://example.com/t-0.5.2", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "size": 10 }
+    } },
+    "0.5.3": { "rollout": 25, "critical": true, "assets": {
+      "darwin/arm64": { "url": "https://example.com/t-0.5.3", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "size": 11, "sig": "RWQ" },
+      "android":      { "url": "https://example.com/t.apk", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "size": 12, "version_code": 4 }
+    } }
+  }
+}

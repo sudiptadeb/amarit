@@ -1,28 +1,22 @@
 package amarit
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
-const goodManifest = `{
-  "spec": 1,
-  "project": "termulaa",
-  "published": "2026-10-09T10:00:00Z",
-  "expires": "2026-11-09T10:00:00Z",
-  "min_version": "0.5.0",
-  "channels": { "stable": "0.5.2", "canary": "0.5.3" },
-  "releases": {
-    "0.5.2": { "assets": {
-      "darwin/arm64": { "url": "https://example.com/t-0.5.2", "sha256": "` + zeros + `", "size": 10 }
-    } },
-    "0.5.3": { "rollout": 25, "critical": true, "assets": {
-      "darwin/arm64": { "url": "https://example.com/t-0.5.3", "sha256": "` + zeros + `", "size": 11, "sig": "RWQ" },
-      "android":      { "url": "https://example.com/t.apk", "sha256": "` + zeros + `", "size": 12, "version_code": 4 }
-    } }
-  }
-}`
+// goodManifest is testdata/manifest.json, the fixture the Kotlin tests in
+// android/ parse too: one file, two implementations of the spec.
+var goodManifest = func() string {
+	b, err := os.ReadFile(filepath.Join("testdata", "manifest.json"))
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
+}()
 
 const zeros = "0000000000000000000000000000000000000000000000000000000000000000"
 
@@ -62,6 +56,7 @@ func TestParseManifestRejects(t *testing.T) {
 		"zero size":               strings.Replace(goodManifest, `"size": 10`, `"size": 0`, 1),
 		"version with bad chars":  strings.Replace(goodManifest, `"0.5.3"`, `"0.5.3 beta"`, -1),
 		"no channels":             strings.Replace(goodManifest, `"channels": {`, `"channels": {}, "x": {`, 1),
+		"android without code":    strings.Replace(goodManifest, `, "version_code": 4`, ``, 1),
 	}
 	for name, body := range cases {
 		if _, err := ParseManifest([]byte(body)); err == nil {

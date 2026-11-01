@@ -63,7 +63,7 @@ so they belong on the same machine or a trusted network.
 | `assets.*.sha256` | hex | yes | digest of the asset bytes |
 | `assets.*.size` | integer | yes | byte length; checked during streaming so an oversized response is cut off |
 | `assets.*.sig` | base64 | signed tier | minisign-format ed25519 signature of the asset by the author's key |
-| `assets.*.version_code` | integer | android | the APK `versionCode`, which Android compares instead of the version string |
+| `assets.*.version_code` | integer | android | the APK `versionCode`; required on the `android` target, where it is what the platform compares (section 3) |
 
 ### Targets
 
@@ -83,6 +83,22 @@ Two modes, chosen by the client at compile time:
 - **exact**: versions are opaque strings matching `[A-Za-z0-9._+-]+`. A target
   is applied when it differs from the running version. `min_version` is ignored
   in this mode. This exists for projects whose versions are build timestamps.
+
+### Android
+
+The running version is what the package manager reports: `versionName` is
+the version string, `versionCode` the integer. An asset's `version_code`
+above the installed code is an update; below it never is, whatever the
+strings say; equal codes with a different version string are an update
+too, since Android installs a rebuild of the same code in place. That last
+rule is how a rolling channel works without touching `versionCode`: the
+build names each push `0.2.1+g6c3c4d4` (semver build metadata, which
+section 3 ignores for order), the manifest's channel points at that string,
+and a phone on the channel sees a new string on the same code.
+`min_version` compares against `versionName` in semver order. A client
+never installs silently: the platform asks the user, and the platform
+refuses an APK signed by a different key than the installed one, which is
+why a publisher's CI must sign every channel with one stable key.
 
 ## 4. Trust tiers
 

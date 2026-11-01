@@ -3,6 +3,7 @@
 //
 //	amarit stamp   [-config amarit.json] -version 0.5.3
 //	amarit release [-config amarit.json] -version 0.5.3 -dist dist [-channel stable] [-out releases.json]
+//	amarit release -version 0.2.1+g6c3c4d4 -version-code 3 -channel latest -asset app-latest.apk -url https://.../app-latest.apk -prune
 //	amarit update  [-check] [-rolling] [unit|glob ...]
 package main
 
@@ -15,8 +16,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -117,6 +120,10 @@ A unit is a JSON file in ~/.amarit/units/; see README.md for its fields
 keep it current (release side):
   amarit stamp   [-config amarit.json] -version X                print the -ldflags that stamp a build
   amarit release [-config amarit.json] -version X -dist DIR      write releases.json for the assets in DIR
+                 [-channel C] [-out FILE] [-expires D]           merged into FILE when it already exists
+                 [-version-code N]                               the APK versionCode; required for the android target
+                 [-asset PATTERN] [-url PATTERN] [-prune]        this run's patterns over release.asset and release.url;
+                                                                 -prune drops releases no channel points at
 
 A program built with amarit updates itself: '<program> update' or '<program> --auto-update'.`)
 }
@@ -163,6 +170,11 @@ func stamp(args []string) error {
 // {version}, {os}, {arch} and {asset} filled in. Without a url pattern the
 // url is the asset's name, which a client resolves against the manifest's
 // own location: the assets sit beside releases.json.
+//
+// -asset and -url are the same patterns for this run alone, for a channel
+// whose asset is not named like the others (a rolling build published
+// under one fixed name). The android target has no arch and carries the
+// APK's versionCode, which CI knows and passes with -version-code.
 func release(args []string) error {
 	fs := flag.NewFlagSet("release", flag.ContinueOnError)
 	config := fs.String("config", "amarit.json", "project configuration")
@@ -171,6 +183,10 @@ func release(args []string) error {
 	channel := fs.String("channel", "stable", "channel to point at this version")
 	out := fs.String("out", "releases.json", "manifest to write")
 	expires := fs.Duration("expires", 0, "how long the manifest stays fresh (0 = no expiry)")
+	versionCode := fs.Int("version-code", 0, "the APK versionCode (android target)")
+	assetPattern := fs.String("asset", "", "asset name pattern for this run, over release.asset")
+	urlFlag := fs.String("url", "", "download URL pattern for this run, over release.url")
+	prune := fs.Bool("prune", false, "drop releases no channel points at")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -184,14 +200,25 @@ func release(args []string) error {
 	if c.Release == nil || len(c.Release.Targets) == 0 {
 		return fmt.Errorf("%s: release.targets is empty", *config)
 	}
-	if c.Release.Asset == "" {
+	if *assetPattern == "" {
+		*assetPattern = c.Release.Asset
+	}
+	if *assetPattern == "" {
 		return fmt.Errorf("%s: release.asset pattern is required", *config)
 	}
 	urlPattern := c.Release.URL
+	if *urlFlag != "" {
+		urlPattern = *urlFlag
+	}
 	if urlPattern == "" {
 		urlPattern = "{asset}"
 	}
 	v := strings.TrimPrefix(*version, "v")
+	for _, target := range c.Release.Targets {
+		if target == "android" && *versionCode <= 0 {
+			return fmt.Errorf("the android target needs -version-code")
+		}
+	}
 
 	m := amarit.Manifest{
 		Spec:      amarit.SpecVersion,
@@ -219,7 +246,7 @@ func release(args []string) error {
 	for _, target := range c.Release.Targets {
 		goos, goarch, _ := strings.Cut(target, "/")
 		fill := strings.NewReplacer("{version}", v, "{os}", goos, "{arch}", goarch)
-		name := fill.Replace(c.Release.Asset)
+		name := fill.Replace(*assetPattern)
 		path := findAsset(*dist, name)
 		if path == "" {
 			return fmt.Errorf("%s: no file named %s under %s", target, name, *dist)
@@ -229,11 +256,22 @@ func release(args []string) error {
 			return err
 		}
 		url := strings.NewReplacer("{version}", v, "{os}", goos, "{arch}", goarch, "{asset}", name).Replace(urlPattern)
-		assets[target] = amarit.Asset{URL: url, SHA256: sum, Size: size}
+		a := amarit.Asset{URL: url, SHA256: sum, Size: size}
+		if target == "android" {
+			a.VersionCode = *versionCode
+		}
+		assets[target] = a
 		fmt.Fprintf(os.Stderr, "  %-14s %s  %d bytes  %s\n", target, name, size, sum[:12])
 	}
 	m.Releases[v] = amarit.Release{Assets: assets}
 	m.Channels[*channel] = v
+	if *prune {
+		for version := range m.Releases {
+			if !slices.Contains(slices.Collect(maps.Values(m.Channels)), version) {
+				delete(m.Releases, version)
+			}
+		}
+	}
 
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {

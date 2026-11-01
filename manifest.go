@@ -39,7 +39,7 @@ type Asset struct {
 	SHA256      string `json:"sha256"`
 	Size        int64  `json:"size"`
 	Sig         string `json:"sig,omitempty"`
-	VersionCode int    `json:"version_code,omitempty"`
+	VersionCode int    `json:"version_code,omitempty"` // required for the android target
 }
 
 var (
@@ -94,6 +94,9 @@ func ParseManifest(data []byte) (*Manifest, error) {
 			}
 			if a.Size <= 0 {
 				return nil, fmt.Errorf("manifest: %s %s: size must be positive", version, target)
+			}
+			if target == "android" && a.VersionCode <= 0 {
+				return nil, fmt.Errorf("manifest: %s android: version_code is required", version)
 			}
 		}
 	}
