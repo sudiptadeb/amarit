@@ -388,7 +388,7 @@ below 1024, tun and routing setup for a tunnel, and a service that should
 run under a dedicated low-privilege account, since switching user needs
 root. Today these stay in raw launchd or systemd beside amarit, and the
 double-supervision guard sees them there. The daemon itself never runs as
-root (README, "Who runs as whom"), and nothing here changes that.
+root (docs/daemon.md, "Who runs as whom"), and nothing here changes that.
 
 Three options were weighed.
 
@@ -397,7 +397,7 @@ turns every machine's daemon into a root daemon, so the user-writable unit
 files in `~/.amarit` and the user-writable binary in `~/go/bin` become
 root's input: the hole issue #4 guards against, made the design. Self-update
 without sudo, the reason the binary is user-owned, is incompatible with a
-root daemon. And every statement in the README's trust section stops
+root daemon. And every statement in the trust section of docs/daemon.md stops
 being true.
 
 **(C) Not supported; root jobs stay in launchd and systemd.** This is the

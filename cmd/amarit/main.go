@@ -114,7 +114,7 @@ keep it alive (this machine):
   amarit rm <unit>
   amarit uninstall
 
-A unit is a JSON file in ~/.amarit/units/; see README.md for its fields
+A unit is a JSON file in ~/.amarit/units/; see docs/daemon.md for its fields
 (env, env_file, dir, restart, no_restart_exit, stop_timeout, limits, instances).
 
 keep it current (release side):

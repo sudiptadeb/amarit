@@ -4,456 +4,168 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/sudiptadeb/amarit.svg)](https://pkg.go.dev/github.com/sudiptadeb/amarit)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Keep it alive. Keep it current.** *Amar*: undying.
+**Keep any program running. Through crashes, logouts and reboots.**
+
+amarit is one small binary for macOS and Linux. Give it a command and it
+keeps that command running: restarted when it dies, started again at boot,
+logs kept. No config files to write, no root once it is set up, no
+ports opened. *Amar*: undying.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh | sh
 ```
 
-amarit is two small things that belong together:
-
-- **A library** a Go program embeds so it can update itself from a release
-  manifest: verify, swap, restart in place with the same PID (or with zero
-  downtime), and roll back by itself if the new version is not healthy.
-  Opt-in: nothing updates without `--auto-update`, unless the project made
-  auto-update its default, and then `--no-auto-update` turns it off.
-- **A daemon** you install once per machine that keeps any program running,
-  with the best persistence the machine allows: LaunchDaemon, LaunchAgent,
-  systemd, or detached. After `sudo amarit install --system` once, every
-  `amarit run` is persistent without sudo.
-
-The two never overlap: the library updates, the daemon keeps alive. A
-program can use either without the other.
-
-> Status: early. The hash tier of updates, descriptor and value handoff
-> across the restart, the daemon, and the Android consumer work end to
-> end; signing, the enterprise tier and Windows follow the roadmap.
-> [docs/design.md](docs/design.md) is the proposal and the reasoning,
-> [docs/spec.md](docs/spec.md) the manifest format.
-
-## Install amarit
+## Quick start
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh | sh
-```
+# 1. Once per machine: start amarit at boot (the only sudo you will need)
+sudo "$(command -v amarit)" install --system
 
-[install.sh](install.sh) downloads the prebuilt binary for your OS and
-architecture (macOS and Linux, amd64 and arm64) from the latest
-[release](https://github.com/sudiptadeb/amarit/releases), checks it against
-`SHA256SUMS`, and puts it in `/usr/local/bin` when that is writable, else
-`~/.local/bin`. `AMARIT_VERSION=v0.6.0` pins a release and
-`AMARIT_INSTALL_DIR=...` picks the directory, set on the `sh` side of the pipe
-(`... | AMARIT_VERSION=v0.6.0 sh`).
+# 2. Keep something running
+amarit run -name site python3 -m http.server 8000
 
-Or build it with Go:
-
-```sh
-go install github.com/sudiptadeb/amarit/cmd/amarit@latest
-```
-
-That puts the binary in `$(go env GOPATH)/bin`, normally `~/go/bin`. Make sure
-it is on your PATH (add `export PATH="$HOME/go/bin:$PATH"` to `~/.zshrc` or
-`~/.bashrc`), then:
-
-```sh
-amarit version
-```
-
-## Keep it alive
-
-Install the daemon once per machine. It picks the strongest persistence the
-machine allows and says which it took:
-
-```sh
-sudo "$(command -v amarit)" install --system    # recommended: starts at boot with nobody logged in;
-                                                # after this, nothing below needs sudo
-amarit install                                  # without sudo: LaunchAgent / systemd user unit when the
-                                                # account has one, else a detached daemon (no reboot survival)
-```
-
-`sudo` has its own PATH, which is why the first form names the binary. The
-daemon runs as you, not as root, and keeps its units in `~/.amarit/`.
-
-Then keep anything running:
-
-```sh
-amarit run web -serve                          # unit "web-serve": restarted when it exits, logs kept, survives reboots
-amarit run -name worker -instances 4 worker    # four copies: worker@1 .. worker@4
-amarit run -name tunnel ssh -N -R 7900:127.0.0.1:7900 vps
+# 3. Check on it
 amarit ls
-amarit logs -f worker@2
-amarit restart 'worker@*' -rolling             # one at a time; each must stay up 2 s before the next goes
-amarit update [-rolling] [web-* ...]           # bring units built with amarit onto their latest release (below)
-amarit stop worker@3 | start worker | rm web-serve
-amarit uninstall
+amarit logs -f site
 ```
 
-A unit is a JSON file in `~/.amarit/units/`; `amarit run` writes a plain
-one, and you can edit it (then `amarit restart <name>` to apply). The
-daemon picks changes up within seconds. Everything a unit can say:
+That is it. `site` now restarts when it exits and comes back after a
+reboot, with nobody logged in.
+
+No sudo? Run `amarit install` instead: it uses a LaunchAgent on macOS or a
+systemd user service on Linux. The table under
+[Where it runs](#where-it-runs) shows what each choice survives.
+
+## What you get
+
+- **Restarts on exit.** It backs off from 1 s to 1 min when a program keeps
+  failing, and you can choose `always`, `on-failure` or `never`.
+- **Survives reboots.** launchd or systemd starts amarit, and amarit starts
+  your programs.
+- **Logs.** Each program writes to `~/.amarit/logs/<name>.log`, rotated
+  at 10 MB.
+- **Several copies.** `-instances 4` runs `worker@1` to `worker@4`. Restart
+  them one at a time with `-rolling`.
+- **Runs as you.** Root is used once, to register amarit with the system.
+  The daemon and your programs never run as root.
+- **No double supervision.** amarit refuses to run a program that launchd
+  or systemd already manages, and tells you how to remove the other one.
+- **Stays current.** The daemon updates itself from amarit's releases and
+  rolls back if a new version does not start.
+
+## Everyday commands
+
+| Command | What it does |
+|---|---|
+| `amarit run [-name N] <cmd> [args...]` | keep a command running (also `-instances N`, `-restart on-failure`, `-dir D`, `-env-file F`) |
+| `amarit ls` | every program, its state, pid and restarts |
+| `amarit logs [-f] <name>` | its output; `-f` follows |
+| `amarit restart <name\|glob> [-rolling]` | restart now; `-rolling` does one copy at a time |
+| `amarit stop <name>` / `amarit start <name>` | take it down and keep it down, or bring it back |
+| `amarit rm <name>` | stop managing it |
+| `amarit update [-check]` | bring programs built with amarit onto their latest release |
+| `amarit uninstall` | remove the daemon; your programs keep running |
+
+Names take a single copy (`worker@2`) or a glob (`'web-*'`).
+
+```sh
+amarit run -name worker -instances 4 ./worker          # four copies: worker@1 .. worker@4
+amarit run -name tunnel ssh -N -R 7900:127.0.0.1:7900 vps
+amarit restart 'worker@*' -rolling                     # each must stay up 2 s before the next
+```
+
+## Configure a program
+
+Each program is a JSON file in `~/.amarit/units/`. `amarit run` writes it
+for you. Edit it to change anything, and the daemon picks the change up
+within seconds (`amarit restart <name>` applies it to a program that is
+already running):
 
 ```json
 {
   "name": "worker",
   "binary": "/usr/local/bin/worker",
-  "args": ["-id", "{instance}", "-model", "http://127.0.0.1:8090"],
-  "env": {"WORKER_ID": "w{instance}", "AMARIT_AUTO_UPDATE": "0"},
+  "args": ["-id", "{instance}"],
   "env_file": "/etc/worker.env",
   "dir": "/var/lib/worker",
-  "instances": 8,
+  "instances": 4,
   "restart": "on-failure",
-  "no_restart_exit": [3],
   "stop_timeout": "60s",
   "limits": {"nofile": 65536}
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `instances` | run N copies, named `worker@1` .. `worker@N` in `ls`, logs and status. Each gets `AMARIT_INSTANCE=<i>`, and `{instance}` in `args` and `env` values becomes its number. Change the number and the daemon adds or removes copies, highest numbers first. `stop`, `start`, `restart` and `logs` take `worker` (every copy) or `worker@3` |
-| `restart` | `always` (default), `on-failure`, or `never`; `no_restart_exit` lists exit codes that mean "leave it down". Restarts back off from 1 s to 1 min; a deliberate `amarit restart` resets that and is not counted |
-| `stop_timeout` | a stop or restart sends SIGTERM to the program's whole process group, its own children included, waits this long (default `10s`), then SIGKILLs whatever is left. Children a crashed program leaves behind are stopped the same way |
-| `limits` | resource limits for the program; `nofile` is the open-files limit. Set from inside the process by starting it through amarit itself, so the pid is still the program's. A value above the hard limit takes the hard limit and says so in the log |
-| `env`, `env_file`, `dir` | extra environment, a file of `KEY=VALUE` lines read at start, the working directory |
+Put secrets in `env_file`, which is read at start and never copied. Every
+field is in [docs/daemon.md](docs/daemon.md#units).
 
-Every unit also gets `AMARIT_MANAGED=1` and `AMARIT_UNIT=<name>`. Output
-goes to `~/.amarit/logs/<name>.log`, rotated at 10 MB with one previous
-file kept, while the program runs.
+## Where it runs
 
-`amarit run` and `amarit start` look for a launchd job or systemd unit that
-already runs the same binary and refuse, naming it and the command that
-removes it: two supervisors for one program restart it in a loop. `-force`
-overrides when you mean it.
+| You ran | macOS | Linux | Survives a reboot with nobody logged in |
+|---|---|---|---|
+| `sudo amarit install --system` | LaunchDaemon | systemd system service | yes |
+| `amarit install` | LaunchAgent | systemd user service plus linger | Linux: yes, when linger can be enabled. macOS: no, it starts at login |
+| neither, just `amarit run` | detached daemon | detached daemon | no: it survives closing the terminal, not a reboot |
 
-Stopping the daemon never stops its units, and a new daemon adopts them.
-The daemon never touches a unit's binary: updates are the program's own
-business, below.
+In every case the daemon and your programs run as you. The CLI talks to the
+daemon only through files in `~/.amarit`: there is no socket and no port.
+The full trust model, including what is written where and who owns each
+file, is in [docs/daemon.md](docs/daemon.md#who-runs-as-whom).
 
-The daemon does keep *itself* current, using the library like any other
-program: it declares auto-update its default (amarit's own `amarit.json`
-says the same), so `amarit daemon` checks
-[amarit's releases](https://github.com/sudiptadeb/amarit/releases) hourly,
-verifies, swaps the binary and restarts in place. The pid does not change,
-launchd or systemd notice nothing, and the units stay its children and are
-adopted with their pids; a version that cannot come up three times is
-rolled back. The log says so: `amarit v0.5.2: daemon 4745 supervising
-...` and `auto-update on: amarit 0.5.2, channel stable, every 1h0m0s`.
-`AMARIT_AUTO_UPDATE=0` in the job's environment, or `amarit daemon
---no-auto-update`, turns it off. Only the daemon checks; `amarit ls` and
-the other short commands run whatever is installed. A `go install` build
-knows its version from the module Go recorded in it and updates the same
-way: it takes the next release, not the one it already is.
+## Install options
 
-## Who runs as whom
+The script detects macOS or Linux on amd64 or arm64, downloads the binary
+from the latest [release](https://github.com/sudiptadeb/amarit/releases),
+checks it against `SHA256SUMS`, and installs it to `/usr/local/bin`, or
+`~/.local/bin` when that is not writable.
 
-amarit grants no privilege you did not have. The daemon and every unit run
-as the user who installed it, never as root; root is used once, to register
-the daemon with the init system, and not again.
-
-```text
-init system: launchd / systemd                        runs as root
-  |
-  +-- service file, root-owned, names a user
-  |     /Library/LaunchDaemons/com.amarit.daemon.plist   UserName=you
-  |     /etc/systemd/system/amarit-you.service           User=you
-  |
-  +--> amarit daemon                                    runs as you
-         reads  ~/.amarit/units/      (wanted state)
-         writes ~/.amarit/run/, logs/ (observed state)
-         |
-         +--> units: web, worker@1..4, tunnel            run as you
-
-  amarit run | stop | restart | update   --writes-->   ~/.amarit/
-  (the CLI, as you; no socket, no port, no RPC)
+```sh
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh | AMARIT_VERSION=v0.6.0 sh       # a specific release
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh | AMARIT_INSTALL_DIR=~/bin sh     # a specific directory
+go install github.com/sudiptadeb/amarit/cmd/amarit@latest                                                        # from source, into ~/go/bin
 ```
 
-| | `install` writes | owner | daemon runs as | survives a reboot with nobody logged in | sudo afterwards |
-|---|---|---|---|---|---|
-| macOS, `sudo amarit install --system` | `/Library/LaunchDaemons/com.amarit.daemon.plist`, `UserName=<you>` | root:wheel, 0644 | you | yes | only to remove the plist |
-| macOS, `amarit install` | `~/Library/LaunchAgents/com.amarit.daemon.plist` | you | you | no: starts at login. With no desktop session (SSH into a headless Mac) a detached daemon is started instead | no |
-| Linux, `sudo amarit install --system` | `/etc/systemd/system/amarit-<you>.service`, `User=<you>` | root, 0644 | you | yes | only to remove the unit |
-| Linux, `amarit install` | `~/.config/systemd/user/amarit.service`, then `loginctl enable-linger <you>` | you | you | yes if lingering could be enabled; else the daemon stops at logout and the command prints the `loginctl` line to run | no |
-| other | nothing: `install` refuses; `amarit run` starts a detached daemon | | you | no | no |
+To remove it, stop your programs (`amarit stop <name>`), run `amarit
+uninstall` (`sudo amarit uninstall` for a macOS `--system` install; on
+Linux, `sudo systemctl disable --now amarit-$USER` and delete its unit
+file), then delete the binary and `~/.amarit`.
 
-**`sudo amarit install --system`.** On macOS it writes the plist above,
-owned by root as launchd requires, with `UserName` set to the account that
-ran sudo, `HOME` and `AMARIT_HOME` pointing at that account's home, and
-`ProgramArguments` naming the amarit binary that ran the install, symlinks
-resolved (normally `~/go/bin/amarit`, owned by you). On Linux it writes the
-unit above with `User=`, the same two environment variables, `ExecStart=<that
-binary> daemon`, `Restart=always`, enabled for `multi-user.target`. It needs
-`SUDO_USER`: run as plain root, or with `SUDO_USER=root`, it refuses, because
-there is no user to name. `sudo amarit uninstall` removes the LaunchDaemon;
-on Linux the system unit is removed by hand today (`sudo systemctl disable
---now amarit-<you>`, then delete the file).
+## For developers: programs that update themselves
 
-**`amarit install`** without sudo takes what the account has: a LaunchAgent
-when launchd has a session for your uid, a systemd user unit when
-`systemctl --user` answers, with `loginctl enable-linger` attempted after it.
-When neither is there, and when `amarit run` finds no daemon, it starts one
-detached in its own session: that survives the terminal, not a reboot.
-
-**Who the daemon runs as.** The installing user, in every form above.
-Nothing refuses a daemon started as root by hand today (`sudo amarit run`
-would create `/var/root/.amarit` and a detached root daemon); issue
-[#4](https://github.com/sudiptadeb/amarit/issues/4) adds that guard.
-
-**Who units run as.** The daemon's user. A unit has no user field. Each
-unit starts in its own session, so its pid is its process-group id and a
-stop reaches its children; a unit with `limits` is started through
-`amarit __exec`, which sets them and execs the program. `env` comes from the
-unit file, `env_file` is read at each start and never copied anywhere.
-
-**How the CLI talks to the daemon.** Through files in `~/.amarit`, nothing
-else: `units/<name>.json` is wanted state, `run/<name>.json` observed
-state, `run/<name>.restart` and `run/<name>.stopped` are requests,
-`daemon.pid` says who is running, `logs/<name>.log` is the output. The
-daemon polls every two seconds. There is no socket and no port, so the
-access rule is: whoever can write `~/.amarit` controls the daemon.
-
-**Self-update without sudo.** The daemon's binary and every unit's binary
-are files you own, so the library swaps them without root. That is safe
-because the root-owned service file runs the user-writable binary *as you*.
-The user line is the whole guarantee: were `UserName` or `User=` missing,
-launchd or systemd would run a binary you can write as root, and anything
-running as you could become root. amarit always writes the line and refuses
-to install without a user to put in it; #4 adds the second check, a daemon
-that refuses uid 0 and a `status` that warns about a service file with no
-user.
-
-**What it implies.** Whoever can write `~/.amarit/units` can make any
-program run persistently as you, across reboots, without sudo. That is the
-same power as your crontab or your shell's rc files, and it has the same
-owner. Secrets belong in `env_file`, which the daemon reads at exec; `env`
-is stored in the unit JSON. Today the directories are 0755 and the unit,
-run, pid and log files 0644, so another local account that can traverse
-your home can read them; issue
-[#5](https://github.com/sudiptadeb/amarit/issues/5) tightens them to
-0700/0600.
-
-**Other platforms.** On anything but macOS and Linux, `amarit install`
-refuses (with or without `--system`); `amarit run` starts a detached daemon
-as you, with no reboot survival. On Windows there are also no process
-groups, no `limits`, and no in-place self-update. Windows is on the roadmap.
-
-## Keep it current
-
-An `amarit.json` at the repository root is the project's configuration,
-read by `amarit release` to write the manifest and carried by the binary
-so it knows where to look:
-
-```json
-{
-  "project": "termulaa",
-  "releases": "https://github.com/sudiptadeb/termulaa/releases/latest/download/releases.json",
-  "release": {
-    "targets": ["darwin/arm64", "darwin/amd64", "linux/amd64", "linux/arm64"],
-    "asset": "termulaa-{os}-{arch}-v{version}",
-    "url": "https://github.com/sudiptadeb/termulaa/releases/download/v{version}/{asset}"
-  }
-}
-```
-
-The file reaches the binary one of two ways, the author's choice. Stamped
-at build, so the program needs nothing but the one call:
+amarit is also a Go library. Embed it, and every installed copy of your
+program can update itself from a release manifest. It verifies the
+download, swaps the binary, restarts in place with the same PID, and rolls
+back if the new version is not healthy.
 
 ```go
 import "github.com/sudiptadeb/amarit"
 
 func main() {
-    amarit.Start() // reads the stamped amarit.json
-    // the program as before
+    amarit.Start() // reads the amarit.json stamped into the build
+    // your program as before
 }
 ```
 
 ```sh
-go build -ldflags "$(amarit stamp -version 0.5.3)" ./cmd/app
-amarit release -version 0.5.3 -dist release        # writes releases.json
+go build -ldflags "$(amarit stamp -version 1.2.0)" ./cmd/app   # stamp the version and amarit.json in
+amarit release -version 1.2.0 -dist release                    # write releases.json for the release
+app update                                                     # what your users run
+app --auto-update                                              # or: check hourly and update
 ```
 
-Or embedded by the program itself, for a project whose users install it
-with `go install`, which passes no linker flags; the version is then the
-module version Go records in every such build:
+Updates are opt-in. Nothing updates unless the user passes
+`--auto-update`, the program runs under amarit, or the project makes
+auto-update its default. Open connections and terminals can be handed
+across the restart, and an Android library reads the same manifest.
 
-```go
-//go:embed amarit.json           // a copy of the file next to main, or the file itself if main lives at the root
-var projectFile []byte
+The full guide is [docs/updates.md](docs/updates.md), the manifest format
+is [docs/spec.md](docs/spec.md), and the reasoning behind the design is
+[docs/design.md](docs/design.md).
 
-func main() {
-    amarit.Start(amarit.ProjectFile(projectFile))
-}
-```
+## Status
 
-A program with no `amarit.json` at all says the same things in code:
-`amarit.Start(amarit.Project("app"), amarit.Releases(url), amarit.Version(v))`.
-Whatever carried them, the values meet in one place; nothing is derived
-from a module path or a hosting convention. A build that carries none of
-them is inert and says so when asked (`app update --check`).
-
-Then every installed copy can update itself:
-
-```sh
-app update                        # check, verify, swap, restart, print the version, exit
-app update --check                # say what is available, change nothing
-app --auto-update[=canary]        # the same on a loop, hourly unless told otherwise
-app --update-url https://mirror/releases.json
-app --auto-update --update-interval 5m
-```
-
-A stateful program adds hooks: `amarit.Start(amarit.Handoff(fds), amarit.Drain(fn), amarit.Healthy(fn))`.
-`Handoff` returns the descriptors (listeners, PTY masters) that must survive
-the restart; the new process gets them back from `amarit.Inherited()` with
-the names it gave them, so an update keeps every connection and terminal.
-`amarit.HandoffValues(fn)` carries small named strings the same way, for
-what is not a descriptor: the pid and port of a child process the program
-re-adopts after the restart. The new process reads them once with
-`amarit.InheritedValues()`; the variable is cleared so nothing it starts
-sees them.
-
-The layers, later ones winning: the module version Go recorded in the
-binary (the version only), the stamped file, options in code in the order
-given (`amarit.ProjectFile(data)`, `amarit.Interval(5*time.Minute)`,
-`amarit.Key(k)`, ...), the environment, the command line. So `"interval":
-"5m"` in `amarit.json` is the program's own cadence,
-`AMARIT_UPDATE_INTERVAL=30m` in a unit's environment changes it for that
-install, and `--update-interval` wins for one run. `amarit.BuildVersion()`
-is the version the build carries, for the program's own banner.
-
-Whether the loop runs at all follows the same layers. Auto-update is off
-unless somebody said otherwise, and nothing is detected: a project that
-wants its users to opt *out* instead of in puts `"auto_update": true` in
-`amarit.json` (or `amarit.AutoUpdate(true)` in code); a program running as
-an amarit unit has it on (the operator said "keep this current" by putting
-it there); `AMARIT_AUTO_UPDATE=1` or `=0` in the environment overrides
-both; `--auto-update` or `--no-auto-update` on the command line wins over
-everything.
-
-Several processes on one binary (a unit with `instances`, or units that
-share a program) take turns through a lock beside the binary, so the file is
-swapped once; but each then restarts on its own schedule, within the hour.
-For a service stack, give such units `"AMARIT_AUTO_UPDATE": "0"` and update
-them together with `amarit update`, below.
-
-## Update a service you build locally
-
-A program that runs as amarit units on the machine it is built on needs no
-release host. Point `releases` at a directory and leave `release.url` out,
-so each asset is named relative to the manifest:
-
-```json
-{
-  "project": "app",
-  "releases": "/srv/app/releases/releases.json",
-  "release": { "targets": ["linux/amd64"], "asset": "app-{os}-{arch}-v{version}" }
-}
-```
-
-Build with the stamp and release into that directory:
-
-```sh
-go build -ldflags "$(amarit stamp -version 1.4.0)" -o /srv/app/releases/app-linux-amd64-v1.4.0 ./cmd/app
-amarit release -version 1.4.0 -dist /srv/app/releases -out /srv/app/releases/releases.json
-```
-
-Then bring the running units onto it:
-
-```sh
-amarit update -check              # what every unit built with amarit would do
-amarit update                     # all of them
-amarit update 'web-*' -rolling    # some of them, one instance at a time
-```
-
-`amarit update` runs each program's own `<binary> update` once per binary,
-however many units share it, with the unit's working directory and
-environment; then it restarts the units whose binary changed and leaves the
-rest alone, so it is safe to run after every build. If a restart fails (an
-instance exits, a rolling restart stops), it puts the previous binary back
-from `<bin>.amarit/prev`, restarts the units, keeps the rejected binary as
-`<bin>.amarit/bad`, and says so. A unit named outright whose program was not
-built with amarit is an error; with no names such units are skipped and
-listed.
-
-## Keep an Android app current
-
-The same manifest, consumed from Kotlin: the library in [`android/`](android/)
-checks it, compares against the installed `versionCode`, downloads and
-verifies the APK, and hands it to the package installer, where the user taps
-Install. Platform APIs only, minSdk 26.
-
-```kotlin
-// settings.gradle.kts: maven("https://jitpack.io") among the repositories
-// build.gradle.kts:    implementation("com.github.sudiptadeb:amarit:v0.6.0")
-// AndroidManifest.xml: <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-
-override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    Amarit.start(this)          // reads assets/amarit.json; inert, and says so, without one
-}
-```
-
-`assets/amarit.json` is the repository's `amarit.json`, copied in by the
-build (a six-line Gradle task; see the etchosts project for one). With
-`"auto_update": true` in it the app checks on a schedule and prompts; the
-user's switch, `Amarit.current?.autoUpdate = false`, turns that off, and
-`channel = "latest"` follows another channel. Without it, nothing runs
-until the app's own button calls `checkNow(activity)`.
-
-CI publishes the APK and the manifest together. With the amarit CLI
-installed on the runner (`go install github.com/sudiptadeb/amarit/cmd/amarit@latest`):
-
-```sh
-amarit release -version 0.2.1 -version-code 3 -dist dist -out dist/releases.json
-amarit release -version "0.2.1+g${sha::7}" -version-code 3 -channel latest \
-    -asset app-latest.apk -url "https://github.com/o/r/releases/download/latest/{asset}" \
-    -dist dist -out dist/releases.json -prune
-```
-
-The `android` target has no arch and carries the APK's `versionCode`; an
-equal code with a new version string is a rebuild, which is how a rolling
-channel updates phones on every push without bumping the code (spec,
-section 3). On GitHub the manifest lives on the rolling pre-release
-(`releases/download/latest/releases.json`), since `releases/latest/download/`
-skips pre-releases. One signing key for every channel, or the platform
-refuses the update.
-
-## How an update runs
-
-```
-check manifest → download, hash → verify, smoke test → swap in, keep prev → restart
-                                                                            │
-                        running the new version ◀── healthy? ──── no ──▶ restore prev
-```
-
-Every check before the swap fails closed and leaves the running binary
-untouched. A version that does not report healthy within three starts is
-rolled back without anyone logging in. Restart is in place by default (same
-PID, inherited descriptors); `"restart": "overlap"` starts the new process
-beside the old one for zero downtime where the supervisor can follow a PID
-change.
-
-## The manifest
-
-`releases.json`, published as a release asset:
-
-```json
-{
-  "spec": 1, "project": "termulaa", "published": "2026-10-09T10:00:00Z",
-  "min_version": "0.5.0",
-  "channels": { "stable": "0.5.2", "canary": "0.5.3" },
-  "releases": {
-    "0.5.3": { "rollout": 25, "assets": { "darwin/arm64": { "url": "…", "sha256": "…", "size": 7908066 } } }
-  }
-}
-```
-
-`min_version` is the floor and the kill switch; channels point at versions.
-Signing (ed25519, minisign format) is an add-on tier, never a prerequisite.
-Full format: [docs/spec.md](docs/spec.md).
-
-## Roadmap
-
-Overlap restart → signed and enterprise tiers → unit health probes
-(`service.health`) → `amarit install` adopting a program's own service →
-Windows → spec 1.0.
+Early. The daemon, hash-verified updates, descriptor
+handoff and the Android library work end to end. Next on the roadmap:
+overlap restarts, signed and enterprise tiers, unit health probes, adopting
+existing services, Windows, and spec 1.0.
 
 MIT. See [LICENSE](LICENSE).
