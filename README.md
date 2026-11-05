@@ -17,24 +17,31 @@ curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh |
 
 ## Quick start
 
+**1. Pick how amarit should start.** Do this once per machine.
+
+| You want | Run | What you get |
+|---|---|---|
+| Programs that come back after a restart, even with nobody logged in. For servers, home labs and anything that must always be up | `sudo "$(command -v amarit)" install --system` | Starts at boot. This is the only time you need sudo |
+| Programs that keep running after you close the terminal or log out of SSH. For quick jobs, tunnels and dev servers | nothing: just use `amarit run` | amarit starts in the background by itself. A reboot stops it, and the next `amarit run` brings it and your programs back |
+
+Not sure? Start with `amarit run`. You can add the system install later,
+and your programs and their settings stay as they are.
+
+**2. Keep something running.**
+
 ```sh
-# 1. Once per machine: start amarit at boot (the only sudo you will need)
-sudo "$(command -v amarit)" install --system
-
-# 2. Keep something running
 amarit run -name site python3 -m http.server 8000
+```
 
-# 3. Check on it
+**3. Check on it.**
+
+```sh
 amarit ls
 amarit logs -f site
 ```
 
-That is it. `site` now restarts when it exits and comes back after a
-reboot, with nobody logged in.
-
-No sudo? Run `amarit install` instead: it uses a LaunchAgent on macOS or a
-systemd user service on Linux. The table under
-[Where it runs](#where-it-runs) shows what each choice survives.
+`site` now restarts whenever it exits. If you did the system install, it
+also comes back after a reboot.
 
 ## What you get
 
