@@ -6,6 +6,10 @@
 
 **Keep it alive. Keep it current.** *Amar*: undying.
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh | sh
+```
+
 amarit is two small things that belong together:
 
 - **A library** a Go program embeds so it can update itself from a release
@@ -30,6 +34,20 @@ program can use either without the other.
 ## Install amarit
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/sudiptadeb/amarit/main/install.sh | sh
+```
+
+[install.sh](install.sh) downloads the prebuilt binary for your OS and
+architecture (macOS and Linux, amd64 and arm64) from the latest
+[release](https://github.com/sudiptadeb/amarit/releases), checks it against
+`SHA256SUMS`, and puts it in `/usr/local/bin` when that is writable, else
+`~/.local/bin`. `AMARIT_VERSION=v0.6.0` pins a release and
+`AMARIT_INSTALL_DIR=...` picks the directory, set on the `sh` side of the pipe
+(`... | AMARIT_VERSION=v0.6.0 sh`).
+
+Or build it with Go:
+
+```sh
 go install github.com/sudiptadeb/amarit/cmd/amarit@latest
 ```
 
@@ -40,9 +58,6 @@ it is on your PATH (add `export PATH="$HOME/go/bin:$PATH"` to `~/.zshrc` or
 ```sh
 amarit version
 ```
-
-Prebuilt binaries for macOS and Linux are attached to each
-[release](https://github.com/sudiptadeb/amarit/releases).
 
 ## Keep it alive
 
